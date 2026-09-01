@@ -1,0 +1,10 @@
+# graphical.target
+
+[unit]
+description = "Mitos Graphical Target"
+requires = ["multi-user.target"]
+after = ["multi-user.target"]
+wants = [
+    "mitos-gui.service",
+    "mitos-session.service",
+]
