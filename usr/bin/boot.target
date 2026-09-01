@@ -1,0 +1,4 @@
+# boot.target
+
+[unit]
+description = "Mitos Boot Target"
