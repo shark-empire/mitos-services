@@ -1,0 +1,13 @@
+# mitos-logind.service
+
+[unit]
+description = "Mitos Login Manager"
+after = ["boot.target"]
+
+[service]
+exec_start = "/usr/bin/mitos-logind"
+restart = "always"
+restart_ms = 2000
+
+[install]
+target = "multi-user.target"
