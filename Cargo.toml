@@ -1,0 +1,45 @@
+# Cargo.toml
+
+[package]
+name = "mitos-services"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mitos_services"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mitos-services"
+path = "src/main.rs"
+
+[[bin]]
+name = "mitosctl"
+path = "bin/mitosctl.rs"
+
+[dependencies]
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "process",
+    "signal",
+    "net",
+    "io-util",
+    "time",
+    "sync",
+    "macros",
+] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "1"
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+clap = { version = "4", features = ["derive"] }
+
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
