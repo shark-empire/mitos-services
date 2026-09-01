@@ -1,0 +1,14 @@
+# mitos-network.service
+
+[unit]
+description = "Mitos Network Service"
+after = ["boot.target"]
+
+[service]
+exec_start = "/usr/bin/mitos-network"
+restart = "always"
+restart_ms = 2000
+user = "root"
+
+[install]
+target = "multi-user.target"
