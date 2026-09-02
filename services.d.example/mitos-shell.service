@@ -1,0 +1,11 @@
+# Example unit file for /etc/mitos/services.d/
+# See src/units.rs for the full (small) set of keys mitos-init reads.
+
+[Unit]
+Description=MITOS interactive shell
+
+[Service]
+ExecStart=/bin/mitos-shell
+Restart=no
+X-Critical=true
+# MemoryMax=256M
