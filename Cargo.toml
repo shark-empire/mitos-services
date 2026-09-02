@@ -1,45 +1,27 @@
-# Cargo.toml
-
 [package]
 name = "mitos-services"
 version = "0.1.0"
 edition = "2021"
-
-[lib]
-name = "mitos_services"
-path = "src/lib.rs"
-
-[[bin]]
-name = "mitos-services"
-path = "src/main.rs"
-
-[[bin]]
-name = "mitosctl"
-path = "bin/mitosctl.rs"
+authors = ["Your Name <babor3331@gmail.com>"]
+description = "MITOS's service manager - runs as a supervised child of mitos-init"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
-tokio = { version = "1", features = [
-    "rt-multi-thread",
-    "process",
-    "signal",
-    "net",
-    "io-util",
-    "time",
-    "sync",
-    "macros",
-] }
-
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
-thiserror = "1"
-
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-clap = { version = "4", features = ["derive"] }
-
+# Notably lighter than mitos-init's own dependency list: none of the
+# moved code (supervisor, cgroups, notify, rollback, users, config, IPC)
+# turned out to need libc directly - it's all nix wrappers or plain std.
+# libc is still needed here for one thing: PR_SET_CHILD_SUBREAPER, which
+# nix doesn't wrap (prctl's operation space is too broad for a single
+# high-level wrapper to cover).
+nix = { version = "0.27", features = ["process", "signal", "hostname"] }
 libc = "0.2"
 
-[dev-dependencies]
-tempfile = "3"
+# Same reasoning as mitos-init's profile: small, fast-loading binary,
+# no unwind machinery for a process whose error paths already return
+# Result rather than panic.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
