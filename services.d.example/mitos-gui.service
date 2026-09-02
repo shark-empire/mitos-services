@@ -1,0 +1,24 @@
+# Example unit file for wiring mitos-gui in as MITOS's primary session.
+# See ASSEMBLY.md before using this - mitos-gui needs its Stage 5 (direct
+# hardware boot via DRM/GBM/libseat) before it can run with no existing
+# display session underneath it, which is what being mitos-init's
+# critical service requires.
+#
+# Copy to /etc/mitos/services.d/mitos-gui.service once that's true, and
+# remove or de-prioritize mitos-shell.service alongside it.
+
+[Unit]
+Description=MITOS Wayland compositor and shell
+
+[Service]
+ExecStart=/usr/bin/mitos-gui
+Restart=no
+X-Critical=true
+# MemoryMax=512M
+# User=mitos-gui
+# Group=mitos-gui
+
+# Have mitos-gui write "READY=1\n" to the path in $NOTIFY_SOCKET (set
+# automatically for every service - see src/notify.rs) once it has an
+# output actually rendering, so mitos-init's status dump (SIGUSR2) can
+# show it as genuinely ready rather than just spawned.
