@@ -32,9 +32,13 @@ available beyond the minimum.
   in every service's environment. Write `READY=1\n` to it once you're
   actually ready to do work (not just "process started"), and a `STATUS`
   request via `mitosctl` (or the raw `SIGUSR2` signal) will show you as
-  ready rather than just spawned. Same wire format as systemd's
-  `sd_notify()` - if you already call that (the `sd-notify` crate,
-  `libsystemd`, or a hand-rolled equivalent), it works against
+  ready rather than just spawned. If you set `WatchdogSec=`, also write
+  `WATCHDOG=1\n` at least that often once you're up - missing that
+  deadline gets you killed and restarted per your `Restart=` policy, the
+  same as if you'd exited outright, since a hung-but-not-exited process
+  is otherwise invisible to supervision. Both are the same wire format as
+  systemd's `sd_notify()` - if you already call that (the `sd-notify`
+  crate, `libsystemd`, or a hand-rolled equivalent), it works against
   mitos-services unmodified; you don't need to detect which init/service
   manager you're running under.
 - **A cgroup** at `/sys/fs/cgroup/mitos-init/<your-service-name>/` (yes,
@@ -61,6 +65,19 @@ All keys are optional except `ExecStart=`.
 | `User=` / `Group=` | Run as this user/group (name or numeric id) instead of root. |
 | `After=name,name` | Start after these services have been spawned - ordering only, checked once at boot. |
 | `X-AfterReady=name,name` | Start only after these services report `READY=1`, up to a 15s timeout (then starts anyway, with a warning logged). Stronger than `After=` - use it when you'd actually break without the dependency up, not just prefer it up first. |
+| `Before=name,name` | The inverse of `After=` - start these named services only after this one. Folded into their effective `After=` automatically. |
+| `Requires=name,name` | Hard dependency: if a named, configured service didn't end up running, this one is skipped too (logged, not fatal to boot). Also implies ordering, same as `After=`. |
+| `Wants=name,name` | Soft dependency: ordering only (same effect as `After=`), doesn't block this service if the named one fails or isn't configured. |
+| `WatchdogSec=` | Seconds. Expect `WATCHDOG=1` at least this often once started - see above. Omit for no watchdog (most services). |
+
+A note on `Requires=`/`Wants=` since real systemd users will have
+expectations here: this project's semantics are intentionally narrower.
+Real systemd's `Requires=`/`Wants=` primarily control what gets *pulled
+into a transaction* when a unit is activated; mitos-services always
+supervises a fixed, fully-configured list, so there's no activation
+transaction for them to affect. Here they're reduced to what actually
+matters in that simpler model: ordering, plus (for `Requires=` only)
+skipping this service if the dependency didn't start.
 
 `X-`-prefixed keys aren't real systemd syntax - they're this project's
 own extensions, using the exact prefix the systemd unit file spec
@@ -70,7 +87,8 @@ file is closer to portable than you might expect.
 
 The same options exist as `init.conf` inline fields if you'd rather not
 use a separate file per service: `path=`, `restart=`, `critical=`,
-`mem_max=`, `user=`, `group=`, `after=`, `after_ready=` - see
+`mem_max=`, `user=`, `group=`, `after=`, `after_ready=`, `before=`,
+`requires=`, `wants=`, `watchdog_sec=` - see
 `init.conf.example`.
 
 ## Restart policy and crash loops

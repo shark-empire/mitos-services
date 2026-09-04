@@ -1,10 +1,12 @@
-# mitos-init configuration
-# Copy this to /etc/mitos/init.conf on the target rootfs.
+# mitos-services configuration
+# Copy this to /etc/mitos/init.conf on the target rootfs (path unchanged
+# from before the mitos-init/mitos-services split - this is what
+# mitos-services reads, not mitos-init itself).
 # Lines starting with # are comments. Unknown keys/fields are logged and
 # skipped rather than treated as fatal - a typo here shouldn't stop boot.
 #
 # For wiring in mitos-gui as MITOS's actual session once it's ready, see
-# ../ASSEMBLY.md and services.d.example/mitos-gui.service.
+# mitos-init's ASSEMBLY.md and services.d.example/mitos-gui.service.
 
 hostname=mitos
 loglevel=info
@@ -12,23 +14,36 @@ loglevel=info
 # before sending SIGKILL.
 shutdown_timeout=5
 
-# service <name> path=<binary> [args=a,b,c] [critical=true|false] [restart=always|on-failure|never] [mem_max=SIZE] [user=NAME] [group=NAME] [after=name,name] [after_ready=name,name]
-#   critical: if this service exits, mitos-init begins system shutdown.
-#             (critical services are never restarted - the exit is treated
-#             as "the session is over", the same way a login shell exiting
-#             ends the session.)
+# service <name> path=<binary> [args=a,b,c] [critical=true|false] [restart=always|on-failure|never] [mem_max=SIZE] [user=NAME] [group=NAME] [after=name,name] [after_ready=name,name] [before=name,name] [requires=name,name] [wants=name,name] [watchdog_sec=N]
+#   critical: if this service exits, mitos-services begins system
+#             shutdown (relayed through mitos-init). Never restarted -
+#             the exit is treated as "the session is over", the same way
+#             a login shell exiting ends the session.
 #   restart:  what to do when a non-critical service exits.
 #             defaults to on-failure if omitted.
 #   mem_max:  memory limit enforced via the service's cgroup (e.g. 256M,
 #             1G, or a bare byte count). Omit for no limit.
 #   user/group: run as this user/group (name or bare numeric id) instead
-#             of root. Omit to run as whatever mitos-init itself runs as.
+#             of root. Omit to run as whatever mitos-services itself runs
+#             as (root, by default).
 #   after:    start after these services have been spawned (ordering
 #             only - see after_ready for a stronger guarantee).
 #   after_ready: start only after these services report READY=1 (up to a
 #             15s timeout, then starts anyway with a warning logged).
+#   before:   the inverse of after= - start these named services only
+#             after this one (folded into their after= automatically).
+#   requires: hard dependency - if a named, configured service didn't
+#             end up running, this service is skipped too. Also implies
+#             ordering, same as after=.
+#   wants:    soft dependency - ordering only (same as after=), doesn't
+#             block this service if the named one fails or is missing.
+#   watchdog_sec: expect a WATCHDOG=1 ping (via $NOTIFY_SOCKET) at least
+#             this often; a missed deadline is treated as a failure and
+#             the service is killed and restarted per its restart=
+#             policy. Omit for no watchdog (most services).
 service shell path=/bin/mitos-shell critical=true restart=never
 
-# Example showing ordering, readiness-gating, and privilege dropping:
-# service db path=/usr/bin/mitos-db user=mitos-db group=mitos-db restart=on-failure
-# service web path=/usr/bin/mitos-web user=www-data after=db after_ready=db restart=always mem_max=256M
+# Example showing ordering, readiness-gating, hard dependencies,
+# privilege dropping, and a watchdog:
+# service db path=/usr/bin/mitos-db user=mitos-db group=mitos-db restart=on-failure watchdog_sec=30
+# service web path=/usr/bin/mitos-web user=www-data requires=db after_ready=db restart=always mem_max=256M

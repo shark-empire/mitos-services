@@ -98,19 +98,17 @@ for a handful of simple commands.
 
 Flagged rather than silently missing:
 
-- **`Before=`/`Requires=`/`Wants=`** - only `After=`/`X-AfterReady=`
-  exist so far. Real systemd's activation semantics (what gets pulled
-  into a boot transaction, and how) don't map cleanly onto this
-  project's simpler "supervise a fixed configured list" model, so this
-  needs real design work, not just more parsing.
 - **Targets** (`multi-user.target`, `graphical.target`, ...) - there's
   currently one flat service list, not named groups you can switch
   between (rescue mode is a mitos-init-level special case that bypasses
   this process entirely, not a target).
-- **Watchdog pings** (`WATCHDOG=1` over the same notify socket) - only
-  `READY=1` is handled; a hung-but-not-exited service isn't currently
-  distinguishable from a healthy one.
 - **Timers** - no `.timer`-equivalent scheduled/periodic activation.
+
+Already built, despite being listed as future work in an earlier version
+of this file: dependency ordering beyond simple `After=` (`Before=`,
+`Requires=`, `Wants=` - see `INTEGRATION.md` for the intentionally
+narrower semantics vs real systemd) and watchdog pings (`WatchdogSec=`,
+`WATCHDOG=1` over the same notify socket `READY=1` uses).
 
 ## License
 
