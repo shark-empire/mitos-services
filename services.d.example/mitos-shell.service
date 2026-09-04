@@ -1,5 +1,5 @@
 # Example unit file for /etc/mitos/services.d/
-# See src/units.rs for the full (small) set of keys mitos-init reads.
+# See src/units.rs (or INTEGRATION.md) for the full set of keys.
 
 [Unit]
 Description=MITOS interactive shell
