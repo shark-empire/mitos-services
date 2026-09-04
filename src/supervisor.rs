@@ -9,7 +9,7 @@
 //!   so `status_summary` can report actual readiness, and
 //!   `expired_watchdogs` can catch a hung-but-not-exited service.
 //!  -  `reload_services` reconciles a running set against a new config
-//!   (start/stop/restart only what changed) - the 
+//!   (start/stop/restart only what changed) - the
 //!   `rollback.rs`'s transactional reload is built on.
 //! - `spawn_all` folds `before=`/`requires=`/`wants=` into an effective
 //!   `after` list (`effective_after`), orders services by it
