@@ -5,14 +5,18 @@
 //! Beyond plain pid tracking, wired in here:
 //! - Every service gets a cgroup (`cgroups.rs`) so teardown can reach
 //!   grandchildren the tracked pid alone never could.
-//! - Every service gets its own readiness socket (`notify.rs`) so
-//!   `status_summary` can report actual readiness, not just "spawned".
+//! - Every service gets its own readiness/watchdog socket (`notify.rs`)
+//!   so `status_summary` can report actual readiness, and
+//!   `expired_watchdogs` can catch a hung-but-not-exited service.
 //! - `reload_services` reconciles a running set against a new config
 //!   (start/stop/restart only what changed) - the mechanism
 //!   `rollback.rs`'s transactional reload is built on.
-//! - `spawn_all` orders services by `after` (`topological_order`) and,
-//!   for `after_ready`, blocks briefly for the dependency's readiness
-//!   before starting the dependent (`wait_for_ready`).
+//! - `spawn_all` folds `before=`/`requires=`/`wants=` into an effective
+//!   `after` list (`effective_after`), orders services by it
+//!   (`topological_order`), enforces `requires=` (skip if the required
+//!   service didn't end up running), and for `after_ready`, blocks
+//!   briefly for the dependency's readiness before starting the
+//!   dependent (`wait_for_ready`).
 //! - Services can run as a specific `user`/`group` (`users.rs`) instead
 //!   of inheriting mitos-init's own root privileges.
 
@@ -22,7 +26,7 @@ use crate::notify::ReadyState;
 use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::WaitStatus;
 use nix::unistd::Pid;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::sync::Arc;
@@ -39,6 +43,11 @@ const READY_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 struct Supervised {
     def: ServiceDef,
     restart_times: Vec<Instant>,
+    /// When this instance was spawned - `expired_watchdogs` falls back
+    /// to this if the service hasn't sent its first `WATCHDOG=1` ping
+    /// yet, so a freshly-started service isn't immediately treated as
+    /// hung before it's had a chance to ping at all.
+    started_at: Instant,
 }
 
 pub enum Outcome {
@@ -67,17 +76,43 @@ impl Supervisor {
     }
 
     /// Starts every service in `defs`, ordered so each comes after
-    /// everything in its `after` list (`topological_order`), waiting
-    /// briefly on any `after_ready` dependency's actual readiness before
-    /// starting the dependent (`wait_for_ready`). Only used for the
-    /// initial boot spawn - `reload_services` deliberately doesn't
-    /// re-order or re-wait on an already-running system.
+    /// everything in its effective `after` list (`effective_after` folds
+    /// in `before=`/`requires=`/`wants=`, then `topological_order` sorts
+    /// by it), skipping any service whose `requires=` names a configured
+    /// service that didn't end up running, and waiting briefly on any
+    /// `after_ready` dependency's actual readiness before starting the
+    /// dependent (`wait_for_ready`). Only used for the initial boot spawn
+    /// - `reload_services` deliberately doesn't re-order, re-wait, or
+    /// re-enforce `requires=` on an already-running system.
     pub fn spawn_all(&mut self, defs: &[ServiceDef]) {
-        for def in topological_order(defs) {
+        let ordered = topological_order(&effective_after(defs));
+        let configured: HashSet<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        let mut spawned: HashSet<String> = HashSet::new();
+
+        for def in ordered {
+            let hard_missing: Vec<String> = def
+                .requires
+                .iter()
+                .filter(|r| configured.contains(r.as_str()) && !spawned.contains(r.as_str()))
+                .cloned()
+                .collect();
+            if !hard_missing.is_empty() {
+                logging::error(&format!(
+                    "service '{}' requires {hard_missing:?} which didn't start - skipping",
+                    def.name
+                ));
+                continue;
+            }
+
             for dep in &def.after_ready {
                 self.wait_for_ready(dep, READY_WAIT_TIMEOUT);
             }
+
+            let name = def.name.clone();
             self.spawn_with_history(def, Vec::new());
+            if self.services.values().any(|s| s.def.name == name) {
+                spawned.insert(name);
+            }
         }
     }
 
@@ -93,6 +128,43 @@ impl Supervisor {
         logging::warn(&format!(
             "timed out waiting for '{name}' to report ready, starting the dependent service anyway"
         ));
+    }
+
+    /// True if any currently-running service has a `watchdog_timeout`
+    /// configured - the main loop uses this (alongside an active reload
+    /// watch) to decide whether it needs to poll instead of blocking
+    /// indefinitely in `waitpid`, since noticing a *missed* deadline
+    /// needs periodic checking, not just reacting to child-exit events.
+    pub fn has_watchdog_services(&self) -> bool {
+        self.services.values().any(|s| s.def.watchdog_timeout.is_some())
+    }
+
+    /// Checks every currently-running service with a `watchdog_timeout`
+    /// configured, and returns the pids of any that have missed their
+    /// deadline - a service that hasn't sent its *first* ping yet is
+    /// judged against its spawn time instead, so it gets a fair chance
+    /// before being killed for something it was never given time to do.
+    /// Callers (the main event loop) are expected to `SIGKILL` the
+    /// returned pids and let the normal reap-and-restart path in
+    /// `handle_exit` take it from there - this function only detects,
+    /// it doesn't act.
+    pub fn expired_watchdogs(&self) -> Vec<i32> {
+        let now = Instant::now();
+        self.services
+            .iter()
+            .filter_map(|(&pid, sup)| {
+                let timeout = sup.def.watchdog_timeout?;
+                let last = self
+                    .ready_state
+                    .last_ping(&sup.def.name)
+                    .unwrap_or(sup.started_at);
+                if now.duration_since(last) > timeout {
+                    Some(pid)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     fn spawn_with_history(&mut self, def: ServiceDef, restart_times: Vec<Instant>) {
@@ -112,6 +184,8 @@ impl Supervisor {
                 def.group.as_deref().unwrap_or_default()
             ));
         }
+
+        self.ready_state.forget(&def.name); // clear any stale state from a previous instance
 
         let mut cmd = Command::new(&def.path);
         cmd.args(&def.args);
@@ -134,7 +208,14 @@ impl Supervisor {
                 ));
                 crate::cgroups::create_for(&def.name, def.memory_limit);
                 crate::cgroups::attach(&def.name, pid);
-                self.services.insert(pid, Supervised { def, restart_times });
+                self.services.insert(
+                    pid,
+                    Supervised {
+                        def,
+                        restart_times,
+                        started_at: Instant::now(),
+                    },
+                );
             }
             Err(e) => {
                 logging::error(&format!(
@@ -156,6 +237,7 @@ impl Supervisor {
                             Supervised {
                                 def,
                                 restart_times: Vec::new(),
+                                started_at: Instant::now(),
                             },
                         );
                     }
@@ -181,6 +263,7 @@ impl Supervisor {
 
         logging::warn(&format!("service '{}' {summary}", sup.def.name));
         crate::cgroups::kill_and_remove(&sup.def.name); // sweep any grandchildren this exit left behind
+        self.ready_state.forget(&sup.def.name);
 
         if sup.def.critical {
             return Outcome::Halt(sup.def.name.clone());
@@ -218,9 +301,10 @@ impl Supervisor {
     /// brand-new ones. Returns the names of every service this call
     /// actually started or restarted - `rollback.rs` uses this to scope
     /// its failure watch to only the services a given reload is
-    /// responsible for. Deliberately doesn't re-run `topological_order`
-    /// or `wait_for_ready` - re-establishing full startup ordering on
-    /// every reload of an already-running system would be surprising.
+    /// responsible for. Deliberately doesn't re-run `topological_order`,
+    /// `wait_for_ready`, or `requires=` enforcement - re-establishing
+    /// full startup ordering on every reload of an already-running
+    /// system would be surprising.
     pub fn reload_services(&mut self, new_defs: &[ServiceDef]) -> Vec<String> {
         let mut touched = Vec::new();
 
@@ -237,6 +321,7 @@ impl Supervisor {
                     sup.def.name
                 ));
                 stop_one(pid, &sup.def.name);
+                self.ready_state.forget(&sup.def.name);
             }
         }
 
@@ -308,6 +393,7 @@ impl Supervisor {
 
         for name in &all_names {
             crate::cgroups::kill_and_remove(name);
+            self.ready_state.forget(name);
         }
     }
 
@@ -332,16 +418,54 @@ impl Supervisor {
     }
 }
 
+/// Folds `before=`, `requires=`, and `wants=` into each service's
+/// effective `after` list, so `topological_order` (which only knows
+/// about `after`) sees the combined ordering constraint:
+/// - `Before=X` on service A means A must come before X - injected into
+///   X's effective `after` as A.
+/// - `Requires=`/`Wants=` both imply ordering the same way an explicit
+///   `after=` would; the difference between them (hard vs soft
+///   dependency) is enforced separately, in `spawn_all`, not here.
+fn effective_after(defs: &[ServiceDef]) -> Vec<ServiceDef> {
+    let mut result: Vec<ServiceDef> = defs.to_vec();
+
+    for def in result.iter_mut() {
+        for dep in def.requires.iter().chain(def.wants.iter()) {
+            if !def.after.contains(dep) {
+                def.after.push(dep.clone());
+            }
+        }
+    }
+
+    let before_pairs: Vec<(String, String)> = defs
+        .iter()
+        .flat_map(|d| {
+            d.before
+                .iter()
+                .map(move |target| (target.clone(), d.name.clone()))
+        })
+        .collect();
+    for (target_name, source_name) in before_pairs {
+        if let Some(target) = result.iter_mut().find(|d| d.name == target_name) {
+            if !target.after.contains(&source_name) {
+                target.after.push(source_name);
+            }
+        }
+    }
+
+    result
+}
+
 /// Orders `defs` so each service comes after everything in its `after`
 /// list, using Kahn's algorithm. An unresolvable dependency (missing
 /// service, or a cycle) doesn't stop boot: the remaining services are
 /// just appended in their original order, with a warning, rather than
 /// left out or the loop spinning forever.
 fn topological_order(defs: &[ServiceDef]) -> Vec<ServiceDef> {
-    let names: std::collections::HashSet<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+    let names: HashSet<&str> = defs.iter().map(|d| d.name.as_str()).collect();
     let mut remaining: Vec<&ServiceDef> = defs.iter().collect();
     let mut ordered: Vec<ServiceDef> = Vec::with_capacity(defs.len());
-    let mut placed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut placed: HashSet<String> = HashSet::new();
 
     while !remaining.is_empty() {
         let ready_idx = remaining.iter().position(|d| {
@@ -403,8 +527,12 @@ fn defs_equal(a: &ServiceDef, b: &ServiceDef) -> bool {
         && a.memory_limit == b.memory_limit
         && a.after == b.after
         && a.after_ready == b.after_ready
+        && a.before == b.before
+        && a.requires == b.requires
+        && a.wants == b.wants
         && a.user == b.user
         && a.group == b.group
+        && a.watchdog_timeout == b.watchdog_timeout
 }
 
 fn fallback_shell() -> ServiceDef {
@@ -417,8 +545,12 @@ fn fallback_shell() -> ServiceDef {
         memory_limit: None,
         after: vec![],
         after_ready: vec![],
+        before: vec![],
+        requires: vec![],
+        wants: vec![],
         user: None,
         group: None,
+        watchdog_timeout: None,
     }
 }
 
@@ -436,8 +568,12 @@ mod tests {
             memory_limit: mem,
             after: vec![],
             after_ready: vec![],
+            before: vec![],
+            requires: vec![],
+            wants: vec![],
             user: None,
             group: None,
+            watchdog_timeout: None,
         }
     }
 
@@ -451,8 +587,12 @@ mod tests {
             memory_limit: None,
             after: after.iter().map(|s| s.to_string()).collect(),
             after_ready: vec![],
+            before: vec![],
+            requires: vec![],
+            wants: vec![],
             user: None,
             group: None,
+            watchdog_timeout: None,
         }
     }
 
@@ -508,5 +648,31 @@ mod tests {
         // The real assertion is that this returns at all.
         let ordered = topological_order(&[a, b]);
         assert_eq!(ordered.len(), 2);
+    }
+
+    #[test]
+    fn before_folds_into_the_targets_after_list() {
+        let mut a = svc_named("a", &[]);
+        a.before = vec!["b".to_string()];
+        let b = svc_named("b", &[]);
+
+        let ordered = topological_order(&effective_after(&[b, a]));
+        let names: Vec<&str> = ordered.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn requires_and_wants_both_imply_ordering() {
+        let mut web = svc_named("web", &[]);
+        web.requires = vec!["db".to_string()];
+        let mut web2 = svc_named("web2", &[]);
+        web2.wants = vec!["cache".to_string()];
+        let db = svc_named("db", &[]);
+        let cache = svc_named("cache", &[]);
+
+        let ordered = topological_order(&effective_after(&[web, web2, db, cache]));
+        let pos = |n: &str| ordered.iter().position(|d| d.name == n).unwrap();
+        assert!(pos("db") < pos("web"));
+        assert!(pos("cache") < pos("web2"));
     }
 }

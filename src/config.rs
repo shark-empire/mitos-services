@@ -7,6 +7,7 @@
 
 use crate::logging::Level;
 use std::fs;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestartPolicy {
@@ -26,19 +27,38 @@ pub struct ServiceDef {
     /// means no limit.
     pub memory_limit: Option<u64>,
     /// Service names this should start after (spawn-order only - see
-    /// `supervisor::topological_order`).
+    /// `supervisor::topological_order`). Also populated indirectly from
+    /// other services' `before`/`requires`/`wants` - see
+    /// `supervisor::effective_after`.
     pub after: Vec<String>,
     /// Service names this should wait for `READY=1` from before starting,
     /// up to a bounded timeout (see `supervisor::wait_for_ready`). A
     /// stronger, opt-in guarantee than `after` - most services only need
     /// ordering, not a blocking wait.
     pub after_ready: Vec<String>,
+    /// Service names that should start after *this* one - the inverse of
+    /// `after`, folded into the named services' effective `after` list
+    /// at spawn time rather than tracked as its own ordering concept.
+    pub before: Vec<String>,
+    /// Hard dependencies: if a named service is configured but didn't
+    /// end up running, this service is skipped too (logged, not fatal to
+    /// boot). Also implies ordering, same as `after`.
+    pub requires: Vec<String>,
+    /// Soft dependencies: ordering only (same effect as adding these
+    /// names to `after`) - doesn't block this service from starting if
+    /// the named one fails or isn't configured.
+    pub wants: Vec<String>,
     /// Username or bare uid to run as (see `users.rs`). `None` means run
     /// as whatever mitos-init itself runs as (root, as PID 1).
     pub user: Option<String>,
     /// Group name or bare gid to run as. `None` means the default group
     /// for `user` (or root's, if `user` is also unset).
     pub group: Option<String>,
+    /// If set, this service is expected to send `WATCHDOG=1` at least
+    /// this often (via `$NOTIFY_SOCKET`); missing that deadline is
+    /// treated as a failure - see `supervisor::expired_watchdogs`. `None`
+    /// means no watchdog is expected (most services).
+    pub watchdog_timeout: Option<Duration>,
 }
 
 #[derive(Debug, Clone)]
@@ -64,8 +84,12 @@ impl Default for Config {
                 memory_limit: None,
                 after: vec![],
                 after_ready: vec![],
+                before: vec![],
+                requires: vec![],
+                wants: vec![],
                 user: None,
                 group: None,
+                watchdog_timeout: None,
             }],
         }
     }
@@ -78,24 +102,6 @@ pub fn load_or_default(path: &str) -> Config {
     match fs::read_to_string(path) {
         Ok(text) => parse(&text),
         Err(_) => Config::default(),
-    }
-}
-
-/// The service list used when `cmdline::rescue_requested` is true: just a
-/// plain shell, bypassing whatever's in `init.conf`/`services.d/` -
-/// config being broken is exactly the situation this needs to survive.
-pub fn rescue_service() -> ServiceDef {
-    ServiceDef {
-        name: "rescue".to_string(),
-        path: "/bin/sh".to_string(),
-        args: vec![],
-        critical: true,
-        restart: RestartPolicy::Never,
-        memory_limit: None,
-        after: vec![],
-        after_ready: vec![],
-        user: None,
-        group: None,
     }
 }
 
@@ -178,8 +184,12 @@ fn parse_service(rest: &str) -> std::result::Result<ServiceDef, String> {
     let mut memory_limit = None;
     let mut after = Vec::new();
     let mut after_ready = Vec::new();
+    let mut before = Vec::new();
+    let mut requires = Vec::new();
+    let mut wants = Vec::new();
     let mut user = None;
     let mut group = None;
+    let mut watchdog_timeout = None;
 
     for field in parts {
         let (key, value) = field
@@ -200,8 +210,12 @@ fn parse_service(rest: &str) -> std::result::Result<ServiceDef, String> {
             "mem_max" => memory_limit = crate::cgroups::parse_size(value),
             "after" => after = parse_name_list(value),
             "after_ready" => after_ready = parse_name_list(value),
+            "before" => before = parse_name_list(value),
+            "requires" => requires = parse_name_list(value),
+            "wants" => wants = parse_name_list(value),
             "user" => user = Some(value.to_string()),
             "group" => group = Some(value.to_string()),
+            "watchdog_sec" => watchdog_timeout = value.parse().ok().map(Duration::from_secs),
             _ => {}
         }
     }
@@ -216,8 +230,12 @@ fn parse_service(rest: &str) -> std::result::Result<ServiceDef, String> {
         memory_limit,
         after,
         after_ready,
+        before,
+        requires,
+        wants,
         user,
         group,
+        watchdog_timeout,
     })
 }
 
@@ -235,8 +253,12 @@ mod tests {
             memory_limit: None,
             after: vec![],
             after_ready: vec![],
+            before: vec![],
+            requires: vec![],
+            wants: vec![],
             user: None,
             group: None,
+            watchdog_timeout: None,
         }
     }
 
@@ -278,6 +300,18 @@ mod tests {
         assert_eq!(svc.group.as_deref(), Some("nogroup"));
         assert_eq!(svc.after, vec!["db".to_string()]);
         assert_eq!(svc.after_ready, vec!["cache".to_string()]);
+    }
+
+    #[test]
+    fn parses_before_requires_wants_and_watchdog() {
+        let cfg = parse(
+            "service web path=/usr/bin/web before=proxy requires=db wants=cache watchdog_sec=30\n",
+        );
+        let svc = &cfg.services[0];
+        assert_eq!(svc.before, vec!["proxy".to_string()]);
+        assert_eq!(svc.requires, vec!["db".to_string()]);
+        assert_eq!(svc.wants, vec!["cache".to_string()]);
+        assert_eq!(svc.watchdog_timeout, Some(Duration::from_secs(30)));
     }
 
     #[test]

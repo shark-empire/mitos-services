@@ -17,10 +17,16 @@
 //! else is ignored rather than rejected, so a real systemd unit file with
 //! more sections/keys than we act on still loads):
 //!   `[Service]`  `ExecStart=`, `Restart=(no|always|on-failure)`, `User=`,
-//!                `Group=`, `After=name,name` (comma-separated - real
-//!                systemd repeats the key instead, but this reuses the
-//!                same list syntax `args=`/`after=` already use in
-//!                `init.conf`), `X-Critical=(true|false)`,
+//!                `Group=`, `After=`/`Before=`/`Requires=`/`Wants=`
+//!                (comma-separated name lists - real systemd repeats the
+//!                key instead, but this reuses the same list syntax
+//!                `args=`/`after=` already use in `init.conf`; semantics
+//!                are also intentionally simplified from real systemd's -
+//!                see `supervisor::effective_after`/`spawn_all` - since
+//!                this project supervises a fixed configured list rather
+//!                than real systemd's transactional unit activation),
+//!                `WatchdogSec=` (seconds - see
+//!                `supervisor::expired_watchdogs`), `X-Critical=(true|false)`,
 //!                `X-AfterReady=name,name` (`X-`-prefixed since it isn't
 //!                real systemd syntax - see `supervisor::wait_for_ready`)
 //! The service name comes from the filename (`mitos-shell.service` ->
@@ -30,6 +36,7 @@ use crate::config::{RestartPolicy, ServiceDef};
 use crate::logging;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 const SERVICES_DIR: &str = "/etc/mitos/services.d";
 
@@ -79,8 +86,12 @@ fn parse_unit(path: &Path, text: &str) -> Result<ServiceDef, String> {
     let mut memory_limit = None;
     let mut after = Vec::new();
     let mut after_ready = Vec::new();
+    let mut before = Vec::new();
+    let mut requires = Vec::new();
+    let mut wants = Vec::new();
     let mut user = None;
     let mut group = None;
+    let mut watchdog_timeout = None;
 
     for raw_line in text.lines() {
         let line = raw_line.trim();
@@ -122,8 +133,12 @@ fn parse_unit(path: &Path, text: &str) -> Result<ServiceDef, String> {
             "MemoryMax" => memory_limit = crate::cgroups::parse_size(value),
             "After" => after = parse_name_list(value),
             "X-AfterReady" => after_ready = parse_name_list(value),
+            "Before" => before = parse_name_list(value),
+            "Requires" => requires = parse_name_list(value),
+            "Wants" => wants = parse_name_list(value),
             "User" => user = Some(value.to_string()),
             "Group" => group = Some(value.to_string()),
+            "WatchdogSec" => watchdog_timeout = value.parse().ok().map(Duration::from_secs),
             _ => {} // unrecognized [Service] key: ignored, not rejected
         }
     }
@@ -144,8 +159,12 @@ fn parse_unit(path: &Path, text: &str) -> Result<ServiceDef, String> {
         memory_limit,
         after,
         after_ready,
+        before,
+        requires,
+        wants,
         user,
         group,
+        watchdog_timeout,
     })
 }
 
@@ -183,6 +202,16 @@ mod tests {
         assert_eq!(svc.after_ready, vec!["db".to_string()]);
         assert_eq!(svc.user.as_deref(), Some("nobody"));
         assert_eq!(svc.group.as_deref(), Some("nogroup"));
+    }
+
+    #[test]
+    fn parses_before_requires_wants_and_watchdog() {
+        let text = "[Service]\nExecStart=/usr/bin/proxy\nBefore=web\nRequires=db\nWants=cache\nWatchdogSec=15\n";
+        let svc = parse_unit(Path::new("proxy.service"), text).unwrap();
+        assert_eq!(svc.before, vec!["web".to_string()]);
+        assert_eq!(svc.requires, vec!["db".to_string()]);
+        assert_eq!(svc.wants, vec!["cache".to_string()]);
+        assert_eq!(svc.watchdog_timeout, Some(Duration::from_secs(15)));
     }
 
     #[test]

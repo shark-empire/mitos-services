@@ -1,7 +1,7 @@
-//! sd_notify-compatible service readiness protocol.
+//! sd_notify-compatible service readiness and watchdog protocol.
 //!
 //! Real systemd uses one shared datagram socket plus `SCM_CREDENTIALS`
-//! ancillary messages to authenticate which process a given `READY=1`
+//! ancillary messages to authenticate which process a given message
 //! came from - correct, but `recvmsg`/cmsg parsing needs exact
 //! alignment/padding that's genuinely easy to get subtly wrong without a
 //! compiler to check it against (see how much of this project's riskier
@@ -12,12 +12,13 @@
 //! gets its *own* notify socket
 //! (`/run/mitos-init/notify/<name>.sock`), so the socket a datagram
 //! arrived on already says unambiguously which service it's from. The
-//! wire format is unchanged - `NOTIFY_SOCKET` env var, `READY=1` payload -
-//! so real systemd-aware daemons calling `sd_notify()` work against this
-//! without modification; only our half of the implementation is simpler.
+//! wire format is unchanged - `NOTIFY_SOCKET` env var, `READY=1`/
+//! `WATCHDOG=1` payloads - so real systemd-aware daemons calling
+//! `sd_notify()` work against this without modification; only our half
+//! of the implementation is simpler.
 
 use crate::logging;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -25,14 +26,17 @@ use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
 const NOTIFY_DIR: &str = "/run/mitos-init/notify";
 
-/// Ready-state shared between each per-service listener thread and
-/// whatever wants to query it (currently `Supervisor::status_summary`).
+/// Ready/watchdog state shared between each per-service listener thread
+/// and whatever wants to query it (`Supervisor::status_summary`,
+/// `Supervisor::expired_watchdogs`).
 #[derive(Default)]
 pub struct ReadyState {
     ready: Mutex<HashSet<String>>,
+    watchdog_pings: Mutex<HashMap<String, Instant>>,
 }
 
 impl ReadyState {
@@ -40,9 +44,32 @@ impl ReadyState {
         self.ready.lock().map(|s| s.contains(name)).unwrap_or(false)
     }
 
+    /// When `name` last sent `WATCHDOG=1`, if ever.
+    pub fn last_ping(&self, name: &str) -> Option<Instant> {
+        self.watchdog_pings.lock().ok()?.get(name).copied()
+    }
+
     fn mark_ready(&self, name: &str) {
         if let Ok(mut s) = self.ready.lock() {
             s.insert(name.to_string());
+        }
+    }
+
+    fn mark_ping(&self, name: &str) {
+        if let Ok(mut p) = self.watchdog_pings.lock() {
+            p.insert(name.to_string(), Instant::now());
+        }
+    }
+
+    /// Drops any state for `name` - called when a service is stopped, so
+    /// a stale ready/ping record from a previous instance doesn't leak
+    /// into a freshly (re)started one under the same name.
+    pub fn forget(&self, name: &str) {
+        if let Ok(mut s) = self.ready.lock() {
+            s.remove(name);
+        }
+        if let Ok(mut p) = self.watchdog_pings.lock() {
+            p.remove(name);
         }
     }
 }
@@ -56,10 +83,10 @@ impl ReadyState {
 /// when the service isn't dropping that half of its identity).
 ///
 /// Best-effort: if the socket can't be created, the service just runs
-/// without readiness tracking - equivalent to how it behaves against any
-/// init that doesn't support sd_notify at all, since a well-behaved
-/// `sd_notify()` caller treats a missing/unset `NOTIFY_SOCKET` as
-/// "readiness notification isn't supported here" and carries on
+/// without readiness/watchdog tracking - equivalent to how it behaves
+/// against any init that doesn't support sd_notify at all, since a
+/// well-behaved `sd_notify()` caller treats a missing/unset
+/// `NOTIFY_SOCKET` as "notification isn't supported here" and carries on
 /// regardless.
 pub fn listen_for(name: &str, state: Arc<ReadyState>, uid: Option<u32>, gid: Option<u32>) -> Option<PathBuf> {
     if let Err(e) = std::fs::create_dir_all(NOTIFY_DIR) {
@@ -81,10 +108,10 @@ pub fn listen_for(name: &str, state: Arc<ReadyState>, uid: Option<u32>, gid: Opt
     // Since every service is given its own socket rather than one shared,
     // credential-authenticated socket (see the module doc comment),
     // filesystem permissions are what actually stop a *different* local
-    // process from writing a spoofed READY=1 here. 0600 plus chowning to
-    // the service's own uid/gid (when it's running as one, via
-    // `user=`/`group=`) covers both "only this service can write here"
-    // and "this service actually *can* write here" at once.
+    // process from writing a spoofed READY=1/WATCHDOG=1 here. 0600 plus
+    // chowning to the service's own uid/gid (when it's running as one,
+    // via `user=`/`group=`) covers both "only this service can write
+    // here" and "this service actually *can* write here" at once.
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     chown_path(&path, uid, gid);
 
@@ -128,12 +155,18 @@ fn run(socket: UnixDatagram, name: &str, state: Arc<ReadyState>) {
             continue;
         };
         // Real sd_notify payloads can carry several `KEY=VALUE` lines
-        // (STATUS=, MAINPID=, WATCHDOG=1, ...) - we only act on READY=1
-        // for now, matching the scope of what `status_summary` surfaces.
+        // (STATUS=, MAINPID=, ...) - we act on READY=1 and WATCHDOG=1,
+        // matching what `status_summary`/`expired_watchdogs` use.
         for line in text.lines() {
-            if line == "READY=1" {
-                state.mark_ready(name);
-                logging::debug(&format!("'{name}' reported READY=1"));
+            match line {
+                "READY=1" => {
+                    state.mark_ready(name);
+                    logging::debug(&format!("'{name}' reported READY=1"));
+                }
+                "WATCHDOG=1" => {
+                    state.mark_ping(name);
+                }
+                _ => {}
             }
         }
     }

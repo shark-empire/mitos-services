@@ -20,6 +20,7 @@ mod supervisor;
 mod units;
 mod users;
 
+use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 use std::io::Write;
@@ -136,18 +137,32 @@ fn run_event_loop(sup: &mut Supervisor, cfg: &mut config::Config, shutdown_grace
             ipc::publish_status(&summary);
         }
 
-        let wait_result = if watch.is_some() {
+        // Poll instead of blocking whenever there's something that needs
+        // periodic (not just event-driven) checking: a reload watch's
+        // deadline, or a service's watchdog deadline. Computed once and
+        // reused for both the wait call and the StillAlive sleep below,
+        // so they can't drift out of sync with each other.
+        let polling = watch.is_some() || sup.has_watchdog_services();
+
+        let wait_result = if polling {
             waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG))
         } else {
             waitpid(Pid::from_raw(-1), None)
         };
+
+        for pid in sup.expired_watchdogs() {
+            logging::error(&format!(
+                "pid {pid} missed its watchdog deadline, killing it"
+            ));
+            let _ = kill(Pid::from_raw(pid), Signal::SIGKILL);
+        }
 
         match wait_result {
             Ok(status) => {
                 let mut failed_name: Option<String> = None;
 
                 if matches!(status, WaitStatus::StillAlive) {
-                    if watch.is_some() {
+                    if polling {
                         std::thread::sleep(Duration::from_millis(100));
                     }
                 } else {
