@@ -24,4 +24,4 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "style: auto-format with cargo fmt [autoformat]"
-          file_pattern: "*.rs"
+          file_pattern: "*.rs **/*.rs"
