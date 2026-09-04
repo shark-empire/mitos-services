@@ -1,0 +1,27 @@
+name: Auto Format
+
+on:
+  push:
+    branches: [main]
+    paths: ["**.rs"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[autoformat]')"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: Commit formatting changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style: auto-format with cargo fmt [autoformat]"
+          file_pattern: "*.rs"
