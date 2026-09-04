@@ -1,4 +1,4 @@
-name: CI
+name: service-build
 
 on:
   push:
