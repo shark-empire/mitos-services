@@ -88,7 +88,12 @@ impl ReadyState {
 /// well-behaved `sd_notify()` caller treats a missing/unset
 /// `NOTIFY_SOCKET` as "notification isn't supported here" and carries on
 /// regardless.
-pub fn listen_for(name: &str, state: Arc<ReadyState>, uid: Option<u32>, gid: Option<u32>) -> Option<PathBuf> {
+pub fn listen_for(
+    name: &str,
+    state: Arc<ReadyState>,
+    uid: Option<u32>,
+    gid: Option<u32>,
+) -> Option<PathBuf> {
     if let Err(e) = std::fs::create_dir_all(NOTIFY_DIR) {
         logging::debug(&format!("couldn't create {NOTIFY_DIR}: {e}"));
         return None;
@@ -128,8 +133,12 @@ fn chown_path(path: &Path, uid: Option<u32>, gid: Option<u32>) {
     if uid.is_none() && gid.is_none() {
         return; // still root-owned, which is already correct for a root-run service
     }
-    let Some(path_str) = path.to_str() else { return };
-    let Ok(c_path) = CString::new(path_str) else { return };
+    let Some(path_str) = path.to_str() else {
+        return;
+    };
+    let Ok(c_path) = CString::new(path_str) else {
+        return;
+    };
 
     let raw_uid = uid.unwrap_or(u32::MAX);
     let raw_gid = gid.unwrap_or(u32::MAX);

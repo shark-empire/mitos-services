@@ -136,7 +136,9 @@ impl Supervisor {
     /// indefinitely in `waitpid`, since noticing a *missed* deadline
     /// needs periodic checking, not just reacting to child-exit events.
     pub fn has_watchdog_services(&self) -> bool {
-        self.services.values().any(|s| s.def.watchdog_timeout.is_some())
+        self.services
+            .values()
+            .any(|s| s.def.watchdog_timeout.is_some())
     }
 
     /// Checks every currently-running service with a `watchdog_timeout`
@@ -189,7 +191,8 @@ impl Supervisor {
 
         let mut cmd = Command::new(&def.path);
         cmd.args(&def.args);
-        if let Some(sock) = crate::notify::listen_for(&def.name, self.ready_state.clone(), uid, gid) {
+        if let Some(sock) = crate::notify::listen_for(&def.name, self.ready_state.clone(), uid, gid)
+        {
             cmd.env("NOTIFY_SOCKET", sock);
         }
         if let Some(u) = uid {
@@ -483,7 +486,10 @@ fn topological_order(defs: &[ServiceDef]) -> Vec<ServiceDef> {
             None => {
                 logging::warn(&format!(
                     "dependency cycle among service(s) {:?}, starting in listed order",
-                    remaining.iter().map(|d| d.name.as_str()).collect::<Vec<_>>()
+                    remaining
+                        .iter()
+                        .map(|d| d.name.as_str())
+                        .collect::<Vec<_>>()
                 ));
                 for d in remaining.drain(..) {
                     ordered.push(d.clone());

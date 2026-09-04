@@ -82,7 +82,9 @@ fn run() -> std::io::Result<()> {
 }
 
 fn handle(stream: UnixStream) {
-    let Ok(cloned) = stream.try_clone() else { return };
+    let Ok(cloned) = stream.try_clone() else {
+        return;
+    };
     let mut reader = BufReader::new(cloned);
     let mut line = String::new();
     if reader.read_line(&mut line).is_err() {

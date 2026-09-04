@@ -42,7 +42,8 @@ fn resolve_from_text(text: &str, name: &str, id_field: usize) -> Option<u32> {
 mod tests {
     use super::*;
 
-    const PASSWD: &str = "root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:nobody:/:/usr/sbin/nologin\n";
+    const PASSWD: &str =
+        "root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:nobody:/:/usr/sbin/nologin\n";
 
     #[test]
     fn resolves_a_known_name() {

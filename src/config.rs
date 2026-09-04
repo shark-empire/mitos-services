@@ -170,7 +170,11 @@ pub fn merge_services(mut base: Vec<ServiceDef>, extra: Vec<ServiceDef>) -> Vec<
 }
 
 fn parse_name_list(value: &str) -> Vec<String> {
-    value.split(',').filter(|s| !s.is_empty()).map(String::from).collect()
+    value
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
 }
 
 fn parse_service(rest: &str) -> std::result::Result<ServiceDef, String> {

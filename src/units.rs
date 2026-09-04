@@ -69,7 +69,11 @@ pub fn load_all() -> Vec<ServiceDef> {
 }
 
 fn parse_name_list(value: &str) -> Vec<String> {
-    value.split(',').filter(|s| !s.is_empty()).map(String::from).collect()
+    value
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
 }
 
 fn parse_unit(path: &Path, text: &str) -> Result<ServiceDef, String> {

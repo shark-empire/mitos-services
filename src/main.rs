@@ -204,7 +204,10 @@ fn run_event_loop(sup: &mut Supervisor, cfg: &mut config::Config, shutdown_grace
 /// mitos-init just proceeds on its own fixed timeout instead of waiting
 /// forever.
 fn acknowledge_shutdown() {
-    match std::fs::OpenOptions::new().write(true).open(SHUTDOWN_ACK_FIFO) {
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .open(SHUTDOWN_ACK_FIFO)
+    {
         Ok(mut f) => {
             let _ = f.write_all(b"\n");
         }
