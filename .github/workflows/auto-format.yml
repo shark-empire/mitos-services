@@ -1,27 +1,43 @@
-name: Auto-Format
+name: Auto Format Bot
 
 on:
-  push:
-    branches: [main]
-    paths: ["**.rs"]
-  workflow_dispatch:
+  push:               # runs on every push to any branch
+  workflow_dispatch:  # manual "Run workflow" button in the Actions tab
 
 permissions:
-  contents: write
+  contents: write     # required so the bot can push commits back
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  format:
-    name: cargo fmt
+  auto-fmt:
+    name: cargo fmt → commit → push
     runs-on: ubuntu-latest
-    if: "!contains(github.event.head_commit.message, '[autoformat]')"
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Checkout pushed branch
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.ref }}
+
+      - name: Install Rust + rustfmt
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: cargo fmt --all
-      - name: Commit formatting changes
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "style: auto-format with cargo fmt [autoformat]"
-          file_pattern: "*.rs **/*.rs"
+
+      - name: Format everything
+        run: cargo fmt --all
+
+      - name: Commit & push if anything changed
+        run: |
+          git config user.name  "mitos-fmt-bot"
+          git config user.email "mitos-fmt-bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "✅ Already formatted — nothing to commit."
+          else
+            git commit -m "🤖 style: auto-format with cargo fmt [skip ci]"
+            git push origin HEAD:${{ github.ref_name }}
+            echo "🔧 Formatting commit pushed."
+          fi
