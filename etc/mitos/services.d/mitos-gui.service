@@ -1,0 +1,21 @@
+
+[Unit]
+Description=MITOS Wayland compositor and shell
+  
+[Service]
+# Production path for the Smithay-based
+compositor
+ExecStart=/usr/bin/mitos-gui --drm
+  
+Restart=always
+  
+# Once Stage 5 is ready, set this to
+true to make it the primary session
+X-Critical=true
+  
+# Memory limit enforced via group
+MemoryMax=512M
+  
+# mitos-gui is designed to write
+"READY=1\n" to $NOTIFY_SOCKET
+# once it has an output rendering [5].
