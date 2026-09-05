@@ -84,8 +84,8 @@ impl Supervisor {
     /// `after_ready` dependency's actual readiness before starting the
     /// dependent (`wait_for_ready`). Only used for the initial boot spawn
     /// - `reload_services` deliberately doesn't re-order, re-wait, or
-   /// * List item heading
-///   re-enforce `requires=` on an already-running system.
+    /// * List item heading
+    ///   re-enforce `requires=` on an already-running system.
 
     pub fn spawn_all(&mut self, defs: &[ServiceDef]) {
         let ordered = topological_order(&effective_after(defs));
