@@ -1,4 +1,4 @@
-name: service-build
+name: service-build test
 
 on:
   push:
