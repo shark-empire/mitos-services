@@ -8,9 +8,10 @@
 //! - Every service gets its own readiness/watchdog socket (`notify.rs`)
 //!   so `status_summary` can report actual readiness, and
 //!   `expired_watchdogs` can catch a hung-but-not-exited service.
-//!  -  `reload_services` reconciles a running set against a new config
-//!   (start/stop/restart only what changed) - the
-//!   `rollback.rs`'s transactional reload is built on.
+//! * List item heading
+//!     (start/stop/restart only what changed) - the
+//!     `rollback.rs`'s transactional reload is built on.
+
 //! - `spawn_all` folds `before=`/`requires=`/`wants=` into an effective
 //!   `after` list (`effective_after`), orders services by it
 //!   (`topological_order`), enforces `requires=` (skip if the required
@@ -83,7 +84,9 @@ impl Supervisor {
     /// `after_ready` dependency's actual readiness before starting the
     /// dependent (`wait_for_ready`). Only used for the initial boot spawn
     /// - `reload_services` deliberately doesn't re-order, re-wait, or
-    /// re-enforce `requires=` on an already-running system.
+   /// * List item heading
+///   re-enforce `requires=` on an already-running system.
+
     pub fn spawn_all(&mut self, defs: &[ServiceDef]) {
         let ordered = topological_order(&effective_after(defs));
         let configured: HashSet<&str> = defs.iter().map(|d| d.name.as_str()).collect();
