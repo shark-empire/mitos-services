@@ -1,0 +1,39 @@
+[Unit]
+Description=MITOS Primary Interactive
+Shell
+
+Documentation=https://github.com/shark-
+empire/mitos-shell
+
+# Ensure essential background services
+#are spawned before the shell After=mitos-logger.service After=mitos-network.service
+
+# Wait for readiness before starting
+#the shell
+X-AfterReady=mitos-logger.service
+
+[Servicel]
+# Absolute path to the compiled shell
+#binary
+ExecStart=/bin/mitos-shell
+
+# Restart if it crashes, but not on a
+#-clean 'exit' (0)
+Restart=on-failure
+
+# X-Critical=true means if this exits,
+#the OS begins system shutdown
+X-Critical=true
+
+# Resource isolation via group v2
+MemoryMax=512M
+# Essential environment variables for a
+blank environment
+Environment=TERM=linux
+Environment=HOME=/root
+Environment=USER=root
+Environment=PATH=/usr/local/sbin:/usr/ local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=SHELL=/bin/mitos-shell
+
+[Install]
+WantedBy=multi-user.target
