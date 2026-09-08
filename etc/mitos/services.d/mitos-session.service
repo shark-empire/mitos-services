@@ -1,0 +1,34 @@
+[Unit]
+Description=MITOS Session Manager (Seat, Lock, Idle, Power)
+Documentation=https://github.com/shark-empire/mitos-session
+Requires=mitos-services.service
+After=mitos-services.service
+
+[Service]
+# 'notify' requires the daemon to send a ready signal to mitos-services. 
+# Use 'simple' if your manager doesn't support readiness protocols yet.
+Type=notify
+ExecStart=/usr/lib/mitos/mitos-session --daemon
+
+# Security & Isolation (Best Practices for Rust Daemons)
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run/mitos-session /var/log/mitos /etc/mitos
+PrivateTmp=true
+NoNewPrivileges=false # Required for PAM auth and seat management
+
+# Restart Policy
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Environment
+Environment=RUST_LOG=info
+Environment=MITOS_CONFIG_DIR=/etc/mitos/session.d
+
+# Process limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
