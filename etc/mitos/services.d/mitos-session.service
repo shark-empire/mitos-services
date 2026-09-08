@@ -1,34 +1,21 @@
 [Unit]
 Description=MITOS Session Manager (Seat, Lock, Idle, Power)
 Documentation=https://github.com/shark-empire/mitos-session
-Requires=mitos-services.service
-After=mitos-services.service
 
 [Service]
-# 'notify' requires the daemon to send a ready signal to mitos-services. 
-# Use 'simple' if your manager doesn't support readiness protocols yet.
-Type=notify
-ExecStart=/usr/lib/mitos/mitos-session --daemon
+ExecStart=/usr/lib/mitos/mitos-session
 
-# Security & Isolation (Best Practices for Rust Daemons)
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/run/mitos-session /var/log/mitos /etc/mitos
-PrivateTmp=true
-NoNewPrivileges=false # Required for PAM auth and seat management
-
-# Restart Policy
+# Restart automatically if the daemon panics or crashes
 Restart=on-failure
 RestartSec=5s
-StartLimitIntervalSec=60
-StartLimitBurst=3
 
-# Environment
-Environment=RUST_LOG=info
-Environment=MITOS_CONFIG_DIR=/etc/mitos/session.d
+# Optional: If your calloop event loop hangs for 15 seconds without 
+# sending a WATCHDOG=1 heartbeat, kill and restart it.
+# WatchdogSec=15
 
-# Process limits
-LimitNOFILE=65536
+# Optional: If you need to ensure this starts strictly AFTER another 
+# mitos-services managed daemon (e.g., the network manager), use X-AfterReady:
+# X-AfterReady=mitos-network
 
 [Install]
 WantedBy=multi-user.target
