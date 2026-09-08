@@ -1,0 +1,25 @@
+[Unit]
+Description=MITOS Settings Daemon
+Documentation=https://github.com/shark-empire/mitos-settings
+Requires=mitos-services.service
+After=mitos-session.service
+Wants=mitos-session.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/mitos/mitos-settings --daemon
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Security
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run/mitos-settings ~/.config/mitos
+PrivateTmp=true
+NoNewPrivileges=true
+
+Restart=on-failure
+RestartSec=5s
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
