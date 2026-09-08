@@ -8,6 +8,8 @@ Wants=mitos-session.service
 [Service]
 Type=simple
 ExecStart=/usr/lib/mitos/mitos-settings --daemon
+# Tells mitos-services: "Do not start me until mitos-session has sent READY=1"
+X-AfterReady=mitos-session
 ExecReload=/bin/kill -HUP $MAINPID
 
 # Security
