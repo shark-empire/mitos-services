@@ -1,0 +1,7 @@
+[Timer]
+# First run 5 minutes after mitos-services starts, then every hour
+# after each run finishes - see src/timers.rs's module doc for exactly
+# what these two keys mean (deliberately simpler than real systemd's
+# OnCalendar=-style scheduling).
+OnBootSec=300
+OnUnitActiveSec=3600

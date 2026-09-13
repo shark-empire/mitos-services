@@ -1,0 +1,9 @@
+[Unit]
+Description=Example one-shot log rotation, run periodically by the paired .timer
+
+[Service]
+ExecStart=/usr/bin/mitos-logrotate
+# A timer-triggered run isn't part of any target's continuously-
+# supervised set - X-Target= here would be ignored, since timers.rs
+# looks this service definition up by name regardless of which target
+# is currently active. Left off deliberately, not an oversight.
