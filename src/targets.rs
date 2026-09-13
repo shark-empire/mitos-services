@@ -65,7 +65,8 @@ mod tests {
             svc("b", "graphical"),
             svc("c", "multi-user"),
         ];
-        let names: Vec<&str> = services_in(&all, "multi-user")
+        let multi_user_services = services_in(&all, "multi-user");
+        let names: Vec<&str> = multi_user_services
             .iter()
             .map(|d| d.name.as_str())
             .collect();
