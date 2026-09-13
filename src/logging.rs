@@ -59,7 +59,7 @@ fn write_line(level: Level, tag: &str, msg: &str) {
     if (level as u8) > CURRENT_LEVEL.load(Ordering::Relaxed) {
         return;
     }
-    let line = format!("mitos-init [{tag:>4}] [{:>8.3}] {msg}\n", uptime_secs());
+    let line = format!("mitos-services [{tag:>4}] [{:>8.3}] {msg}\n", uptime_secs());
 
     // Prefer /dev/kmsg so the message survives in `dmesg` even before a
     // syslog daemon exists; fall back to stdout/stderr.

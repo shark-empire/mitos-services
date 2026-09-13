@@ -43,16 +43,34 @@ pub fn available() -> bool {
     fs::metadata(CGROUP_ROOT).is_ok()
 }
 
-fn service_dir(name: &str) -> PathBuf {
-    PathBuf::from(CGROUP_ROOT).join(name)
+fn dir_under(root: &str, name: &str) -> PathBuf {
+    PathBuf::from(root).join(name)
 }
 
-/// Creates (or reuses) the cgroup for `name` and applies `memory_limit`
-/// (bytes) to it if given. Returns whether the cgroup is usable - callers
-/// don't need to branch on this themselves, since `attach`/`kill_and_remove`
-/// already no-op harmlessly when there's no cgroup to act on.
-pub fn create_for(name: &str, memory_limit: Option<u64>) -> bool {
-    let dir = service_dir(name);
+/// One-time (but idempotent - safe to call before every launch, not just
+/// once) setup for an *intermediate* cgroup directory that will itself
+/// have leaf cgroups created under it - unlike a service's own cgroup,
+/// which is always a leaf. Enables the "memory" controller for its
+/// children by writing to its own `cgroup.subtree_control`, the same
+/// delegation step mitos-init performs once, closer to the real cgroup
+/// root, for `CGROUP_ROOT` itself (see the module doc) - `apps.rs` uses
+/// this to self-serve an `apps/` subtree under that already-delegated
+/// root without needing any mitos-init-side change.
+pub fn prepare_intermediate(path: &str) -> bool {
+    if fs::create_dir_all(path).is_err() {
+        return false;
+    }
+    let _ = fs::write(format!("{path}/cgroup.subtree_control"), "+memory");
+    true
+}
+
+/// Creates (or reuses) a leaf cgroup for `name` under `root` and applies
+/// `memory_limit` (bytes) to it if given. Returns whether the cgroup is
+/// usable - callers don't need to branch on this themselves, since
+/// `attach_under`/`kill_and_remove_under` already no-op harmlessly when
+/// there's no cgroup to act on.
+pub fn create_under(root: &str, name: &str, memory_limit: Option<u64>) -> bool {
+    let dir = dir_under(root, name);
     if let Err(e) = fs::create_dir_all(&dir) {
         logging::debug(&format!(
             "cgroup for '{name}': couldn't create {}: {e}",
@@ -68,12 +86,12 @@ pub fn create_for(name: &str, memory_limit: Option<u64>) -> bool {
     true
 }
 
-/// Moves `pid` into `name`'s cgroup. Call this right after spawning -
-/// there's no "spawn directly into a cgroup" primitive on Linux without a
-/// helper like `systemd-run`, so moving a freshly-spawned process in
-/// immediately afterward is the normal pattern.
-pub fn attach(name: &str, pid: i32) {
-    let path = service_dir(name).join("cgroup.procs");
+/// Moves `pid` into `name`'s cgroup under `root`. Call this right after
+/// spawning - there's no "spawn directly into a cgroup" primitive on
+/// Linux without a helper like `systemd-run`, so moving a freshly-spawned
+/// process in immediately afterward is the normal pattern.
+pub fn attach_under(root: &str, name: &str, pid: i32) {
+    let path = dir_under(root, name).join("cgroup.procs");
     if let Err(e) = fs::write(&path, pid.to_string()) {
         logging::debug(&format!(
             "couldn't attach pid {pid} to cgroup '{name}': {e}"
@@ -81,16 +99,32 @@ pub fn attach(name: &str, pid: i32) {
     }
 }
 
-/// Kills every process in `name`'s cgroup - including grandchildren the
-/// supervisor never directly tracked - then removes the (now-empty)
-/// cgroup directory. This is the step plain `kill()` on a single tracked
-/// pid can't do.
-pub fn kill_and_remove(name: &str) {
-    let dir = service_dir(name);
+/// Kills every process in `name`'s cgroup under `root` - including
+/// grandchildren the caller never directly tracked - then removes the
+/// (now-empty) cgroup directory. This is the step plain `kill()` on a
+/// single tracked pid can't do.
+pub fn kill_and_remove_under(root: &str, name: &str) {
+    let dir = dir_under(root, name);
     if fs::write(dir.join("cgroup.kill"), "1").is_err() {
-        return; // no cgroup for this service - not set up, or already gone
+        return; // no cgroup for this name - not set up, or already gone
     }
     let _ = fs::remove_dir(&dir);
+}
+
+/// Creates (or reuses) the cgroup for a *service* `name` (under
+/// `CGROUP_ROOT`) and applies `memory_limit` (bytes) to it if given.
+pub fn create_for(name: &str, memory_limit: Option<u64>) -> bool {
+    create_under(CGROUP_ROOT, name, memory_limit)
+}
+
+/// Moves `pid` into service `name`'s cgroup (under `CGROUP_ROOT`).
+pub fn attach(name: &str, pid: i32) {
+    attach_under(CGROUP_ROOT, name, pid)
+}
+
+/// Kills and removes service `name`'s cgroup (under `CGROUP_ROOT`).
+pub fn kill_and_remove(name: &str) {
+    kill_and_remove_under(CGROUP_ROOT, name)
 }
 
 /// Parses a size like `256M`, `1G`, `512Ki`, or a bare byte count. Binary

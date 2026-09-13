@@ -8,6 +8,7 @@
 //! then restarts, with backoff), not kernel-panic the whole machine.
 //! See INTEGRATION.md (mitos-init) for the split's full rationale.
 
+mod apps;
 mod cgroups;
 mod config;
 mod error;
@@ -15,8 +16,12 @@ mod ipc;
 mod logging;
 mod notify;
 mod rollback;
+mod sandbox;
+mod seccomp;
 mod signals;
 mod supervisor;
+mod targets;
+mod timers;
 mod units;
 mod users;
 
@@ -68,15 +73,19 @@ fn main() {
 
     ipc::spawn_listener();
 
+    let current_target = cfg.default_target.clone();
+    ipc::publish_targets(&current_target, &targets::list(&cfg.services));
+    let timer_defs = timers::load_all();
+
     let mut sup = Supervisor::new();
-    sup.spawn_all(&cfg.services);
+    sup.spawn_all(&targets::services_in(&cfg.services, &current_target));
 
     if let Err(e) = signals::unblock_handled() {
         logging::error(&format!("failed to unblock signals: {e}"));
     }
 
     let grace = Duration::from_secs(cfg.shutdown_timeout_secs);
-    run_event_loop(&mut sup, &mut cfg, grace);
+    run_event_loop(&mut sup, &mut cfg, current_target, timer_defs, grace);
 }
 
 /// So orphaned grandchildren of a service (not just its direct child)
@@ -99,7 +108,13 @@ fn become_subreaper() {
 /// signal here means "stop services and tell mitos-init it's safe to
 /// proceed" (`acknowledge_shutdown`), not "call reboot(2)" - only
 /// mitos-init does that.
-fn run_event_loop(sup: &mut Supervisor, cfg: &mut config::Config, shutdown_grace: Duration) {
+fn run_event_loop(
+    sup: &mut Supervisor,
+    cfg: &mut config::Config,
+    mut current_target: String,
+    mut timer_defs: Vec<timers::TimerDef>,
+    shutdown_grace: Duration,
+) {
     let mut watch: Option<rollback::Watch> = None;
 
     loop {
@@ -126,23 +141,46 @@ fn run_event_loop(sup: &mut Supervisor, cfg: &mut config::Config, shutdown_grace
                     logging::warn(&format!("failed to apply reloaded hostname: {e}"));
                 }
             }
+            timer_defs = timers::load_all();
             let previous = cfg.clone();
-            watch = Some(rollback::begin(sup, &new_cfg, previous));
+            watch = Some(rollback::begin(sup, &new_cfg, previous, &current_target));
             *cfg = new_cfg;
+            ipc::publish_targets(&current_target, &targets::list(&cfg.services));
+        }
+
+        if let Some(name) = ipc::take_pending_isolate() {
+            let available = targets::list(&cfg.services);
+            if !available.iter().any(|t| t == &name) {
+                logging::warn(&format!(
+                    "isolate: no services configured for target '{name}', ignoring"
+                ));
+            } else {
+                logging::info(&format!("isolating to target '{name}'"));
+                let subset = targets::services_in(&cfg.services, &name);
+                sup.reload_services(&subset);
+                current_target = name;
+                ipc::publish_targets(&current_target, &available);
+            }
         }
 
         if signals::STATUS_DUMP_REQUESTED.swap(false, Ordering::SeqCst) {
-            let summary = sup.status_summary();
+            let summary = format!(
+                "active target: {current_target}\n{}",
+                sup.status_summary()
+            );
             logging::info(&summary);
             ipc::publish_status(&summary);
         }
 
+        timers::tick(&timer_defs, &cfg.services);
+
         // Poll instead of blocking whenever there's something that needs
         // periodic (not just event-driven) checking: a reload watch's
-        // deadline, or a service's watchdog deadline. Computed once and
-        // reused for both the wait call and the StillAlive sleep below,
-        // so they can't drift out of sync with each other.
-        let polling = watch.is_some() || sup.has_watchdog_services();
+        // deadline, a service's watchdog deadline, or any timer at all
+        // (even an idle one still needs noticing once it becomes due -
+        // see `timers::has_any`).
+        let polling =
+            watch.is_some() || sup.has_watchdog_services() || timers::has_any(&timer_defs);
 
         let wait_result = if polling {
             waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG))
@@ -166,20 +204,40 @@ fn run_event_loop(sup: &mut Supervisor, cfg: &mut config::Config, shutdown_grace
                         std::thread::sleep(Duration::from_millis(100));
                     }
                 } else {
-                    match sup.handle_exit(status) {
-                        Outcome::Halt(name) => {
-                            let touched = watch.as_ref().is_some_and(|w| w.touched(&name));
-                            if touched {
-                                failed_name = Some(name);
-                            } else {
-                                logging::info("critical service exited, stopping mitos-services");
-                                sup.shutdown_all(shutdown_grace);
-                                acknowledge_shutdown();
-                                return;
-                            }
+                    // A timer's one-shot run or an on-demand app - see
+                    // `timers.rs`/`apps.rs` - is never one of
+                    // `Supervisor`'s tracked services, so both get first
+                    // refusal at recognizing this exit before it falls
+                    // through to `handle_exit` as an ordinary service
+                    // (or genuinely-unknown-orphan) exit.
+                    let exited_pid = match status {
+                        WaitStatus::Exited(p, _) | WaitStatus::Signaled(p, _, _) => {
+                            Some(p.as_raw())
                         }
-                        Outcome::GaveUp(name) => failed_name = Some(name),
-                        Outcome::Continue => {}
+                        _ => None,
+                    };
+                    let already_handled = exited_pid
+                        .map(|pid| timers::reap(pid) || apps::reap(pid))
+                        .unwrap_or(false);
+
+                    if !already_handled {
+                        match sup.handle_exit(status) {
+                            Outcome::Halt(name) => {
+                                let touched = watch.as_ref().is_some_and(|w| w.touched(&name));
+                                if touched {
+                                    failed_name = Some(name);
+                                } else {
+                                    logging::info(
+                                        "critical service exited, stopping mitos-services",
+                                    );
+                                    sup.shutdown_all(shutdown_grace);
+                                    acknowledge_shutdown();
+                                    return;
+                                }
+                            }
+                            Outcome::GaveUp(name) => failed_name = Some(name),
+                            Outcome::Continue => {}
+                        }
                     }
                 }
 

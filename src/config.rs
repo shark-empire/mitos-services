@@ -9,14 +9,15 @@ use crate::logging::Level;
 use std::fs;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RestartPolicy {
     Always,
     OnFailure,
+    #[default]
     Never,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ServiceDef {
     pub name: String,
     pub path: String,
@@ -59,6 +60,23 @@ pub struct ServiceDef {
     /// treated as a failure - see `supervisor::expired_watchdogs`. `None`
     /// means no watchdog is expected (most services).
     pub watchdog_timeout: Option<Duration>,
+    /// Extra environment variables for this service, in addition to
+    /// `NOTIFY_SOCKET` (always injected - see `notify.rs`). From
+    /// `Environment=KEY=VAL` (unit files - repeatable, and
+    /// space-separated for more than one on a line, matching real
+    /// systemd) or `environment=KEY=VAL,KEY2=VAL2` (`init.conf` inline).
+    pub environment: Vec<(String, String)>,
+    /// Directory to `chdir()` into before exec -
+    /// `WorkingDirectory=`/`workdir=`. `None` inherits mitos-services'
+    /// own cwd.
+    pub working_dir: Option<String>,
+    /// Which target (see `targets.rs`) this service belongs to -
+    /// `X-Target=` (unit files) / `target=` (`init.conf` inline).
+    /// Left empty by `Default`/test code, same as every other field here
+    /// - real configured services always get a concrete value (defaulted
+    /// to `targets::DEFAULT_TARGET`) from `parse_service`/`parse_unit`,
+    /// never from this struct's own `Default` impl.
+    pub target: String,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +84,10 @@ pub struct Config {
     pub hostname: Option<String>,
     pub loglevel: Level,
     pub shutdown_timeout_secs: u64,
+    /// Which target (see `targets.rs`) boots by default - `default_target=`.
+    /// Services not in this target aren't started at boot; switch with
+    /// `mitosctl isolate <name>`.
+    pub default_target: String,
     pub services: Vec<ServiceDef>,
 }
 
@@ -75,21 +97,13 @@ impl Default for Config {
             hostname: Some("mitos".to_string()),
             loglevel: Level::Info,
             shutdown_timeout_secs: 5,
+            default_target: crate::targets::DEFAULT_TARGET.to_string(),
             services: vec![ServiceDef {
                 name: "shell".to_string(),
                 path: "/bin/mitos-shell".to_string(),
-                args: vec![],
                 critical: true,
-                restart: RestartPolicy::Never,
-                memory_limit: None,
-                after: vec![],
-                after_ready: vec![],
-                before: vec![],
-                requires: vec![],
-                wants: vec![],
-                user: None,
-                group: None,
-                watchdog_timeout: None,
+                target: crate::targets::DEFAULT_TARGET.to_string(),
+                ..Default::default()
             }],
         }
     }
@@ -140,6 +154,7 @@ fn parse(text: &str) -> Config {
                         cfg.shutdown_timeout_secs = secs;
                     }
                 }
+                "default_target" => cfg.default_target = value.to_string(),
                 _ => eprintln!("mitos-init [WARN]: unknown config key '{key}'"),
             }
         }
@@ -194,6 +209,9 @@ fn parse_service(rest: &str) -> std::result::Result<ServiceDef, String> {
     let mut user = None;
     let mut group = None;
     let mut watchdog_timeout = None;
+    let mut environment = Vec::new();
+    let mut working_dir = None;
+    let mut target = None;
 
     for field in parts {
         let (key, value) = field
@@ -220,6 +238,9 @@ fn parse_service(rest: &str) -> std::result::Result<ServiceDef, String> {
             "user" => user = Some(value.to_string()),
             "group" => group = Some(value.to_string()),
             "watchdog_sec" => watchdog_timeout = value.parse().ok().map(Duration::from_secs),
+            "environment" => environment = parse_env_list(value),
+            "workdir" => working_dir = Some(value.to_string()),
+            "target" => target = Some(value.to_string()),
             _ => {}
         }
     }
@@ -240,7 +261,23 @@ fn parse_service(rest: &str) -> std::result::Result<ServiceDef, String> {
         user,
         group,
         watchdog_timeout,
+        environment,
+        working_dir,
+        target: target.unwrap_or_else(|| crate::targets::DEFAULT_TARGET.to_string()),
     })
+}
+
+/// Parses `environment=`'s comma-separated `KEY=VALUE` pairs - the same
+/// list convention `after=`/`args=` already use. A value containing a
+/// literal comma isn't representable this way; use a `.service` unit
+/// file's `Environment=` (space-separated, not comma) instead if that's
+/// needed.
+fn parse_env_list(value: &str) -> Vec<(String, String)> {
+    value
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .filter_map(|pair| pair.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+        .collect()
 }
 
 #[cfg(test)]
@@ -251,18 +288,7 @@ mod tests {
         ServiceDef {
             name: name.into(),
             path: path.into(),
-            args: vec![],
-            critical: false,
-            restart: RestartPolicy::Never,
-            memory_limit: None,
-            after: vec![],
-            after_ready: vec![],
-            before: vec![],
-            requires: vec![],
-            wants: vec![],
-            user: None,
-            group: None,
-            watchdog_timeout: None,
+            ..Default::default()
         }
     }
 
@@ -330,5 +356,34 @@ mod tests {
         let merged = merge_services(base, extra);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].path, "/bin/a");
+    }
+
+    #[test]
+    fn parses_environment_workdir_and_target() {
+        let cfg = parse(
+            "service web path=/usr/bin/web environment=RUST_LOG=info,PORT=8080 workdir=/var/lib/web target=graphical\n",
+        );
+        let svc = &cfg.services[0];
+        assert_eq!(
+            svc.environment,
+            vec![
+                ("RUST_LOG".to_string(), "info".to_string()),
+                ("PORT".to_string(), "8080".to_string())
+            ]
+        );
+        assert_eq!(svc.working_dir.as_deref(), Some("/var/lib/web"));
+        assert_eq!(svc.target, "graphical");
+    }
+
+    #[test]
+    fn defaults_target_to_multi_user_when_unspecified() {
+        let cfg = parse("service web path=/usr/bin/web\n");
+        assert_eq!(cfg.services[0].target, crate::targets::DEFAULT_TARGET);
+    }
+
+    #[test]
+    fn parses_default_target() {
+        let cfg = parse("default_target=graphical\n");
+        assert_eq!(cfg.default_target, "graphical");
     }
 }

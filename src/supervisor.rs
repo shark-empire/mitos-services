@@ -191,6 +191,12 @@ impl Supervisor {
         {
             cmd.env("NOTIFY_SOCKET", sock);
         }
+        for (key, value) in &def.environment {
+            cmd.env(key, value);
+        }
+        if let Some(dir) = &def.working_dir {
+            cmd.current_dir(dir);
+        }
         if let Some(u) = uid {
             cmd.uid(u);
         }
@@ -535,24 +541,17 @@ fn defs_equal(a: &ServiceDef, b: &ServiceDef) -> bool {
         && a.user == b.user
         && a.group == b.group
         && a.watchdog_timeout == b.watchdog_timeout
+        && a.environment == b.environment
+        && a.working_dir == b.working_dir
+        && a.target == b.target
 }
 
 fn fallback_shell() -> ServiceDef {
     ServiceDef {
         name: "shell".into(),
         path: "/bin/sh".into(),
-        args: vec![],
         critical: true,
-        restart: RestartPolicy::Never,
-        memory_limit: None,
-        after: vec![],
-        after_ready: vec![],
-        before: vec![],
-        requires: vec![],
-        wants: vec![],
-        user: None,
-        group: None,
-        watchdog_timeout: None,
+        ..Default::default()
     }
 }
 
@@ -564,18 +563,8 @@ mod tests {
         ServiceDef {
             name: "x".into(),
             path: path.into(),
-            args: vec![],
-            critical: false,
-            restart: RestartPolicy::Never,
             memory_limit: mem,
-            after: vec![],
-            after_ready: vec![],
-            before: vec![],
-            requires: vec![],
-            wants: vec![],
-            user: None,
-            group: None,
-            watchdog_timeout: None,
+            ..Default::default()
         }
     }
 
@@ -583,18 +572,8 @@ mod tests {
         ServiceDef {
             name: name.into(),
             path: "/bin/true".into(),
-            args: vec![],
-            critical: false,
-            restart: RestartPolicy::Never,
-            memory_limit: None,
             after: after.iter().map(|s| s.to_string()).collect(),
-            after_ready: vec![],
-            before: vec![],
-            requires: vec![],
-            wants: vec![],
-            user: None,
-            group: None,
-            watchdog_timeout: None,
+            ..Default::default()
         }
     }
 

@@ -10,7 +10,16 @@
 //! `kill -USR1`/`-USR2 <mitos-services-pid>` already do: `RELOAD` and
 //! `STATUS` just set the same atomic flags `signals.rs`'s handlers set,
 //! so there's exactly one reload/status code path in the main event
-//! loop regardless of which way it was triggered.
+//! loop regardless of which way it was triggered. `ISOLATE <target>`
+//! (see `targets.rs`) is the same idea with an argument attached, so it
+//! needs a small `Mutex<Option<String>>` instead of a bare flag.
+//! `TARGETS` reads a small cache the main loop publishes on every
+//! target-relevant change, the same way `STATUS` reads one the main loop
+//! publishes on every `STATUS_DUMP_REQUESTED`. `LAUNCH <path> [args...]`
+//! and `APPS` (see `apps.rs`) don't touch the main loop's state at all -
+//! launching and listing on-demand apps needs no coordination with the
+//! services the main loop supervises, so both run straight through to
+//! `apps.rs` on this thread.
 //!
 //! Connections are handled one at a time, sequentially, on this
 //! listener's own thread - not thread-per-connection. `mitosctl` usage
@@ -54,6 +63,58 @@ fn snapshot() -> (u64, String) {
         .unwrap_or((0, String::new()))
 }
 
+/// (current target, every configured target) - published by the main
+/// loop at boot and after every reload or completed isolate (see
+/// `targets.rs`). `TARGETS` reads this directly rather than the
+/// signal-and-wait pattern `STATUS` uses: there's no "please compute
+/// this fresh" step, just whatever the main loop last knew.
+static LAST_TARGETS: OnceLock<Mutex<(String, Vec<String>)>> = OnceLock::new();
+
+pub fn publish_targets(current: &str, all: &[String]) {
+    let cell = LAST_TARGETS.get_or_init(|| Mutex::new((String::new(), Vec::new())));
+    if let Ok(mut guard) = cell.lock() {
+        guard.0 = current.to_string();
+        guard.1 = all.to_vec();
+    }
+}
+
+fn targets_response() -> String {
+    let cell = LAST_TARGETS.get_or_init(|| Mutex::new((String::new(), Vec::new())));
+    let Ok(guard) = cell.lock() else {
+        return "target list unavailable\n".to_string();
+    };
+    if guard.1.is_empty() {
+        return "no targets published yet\n".to_string();
+    }
+    let mut lines = vec![format!("active: {}", guard.0)];
+    for name in &guard.1 {
+        let marker = if name == &guard.0 { "*" } else { " " };
+        lines.push(format!("{marker} {name}"));
+    }
+    lines.push(String::new());
+    lines.join("\n")
+}
+
+/// Set by the `ISOLATE` command, consumed once per main-loop iteration -
+/// the same idea as `RELOAD_REQUESTED`/`STATUS_DUMP_REQUESTED` in
+/// `signals.rs`, except this carries a target name, so a plain
+/// `AtomicBool` isn't enough to hold it.
+static PENDING_ISOLATE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn request_isolate(name: &str) {
+    let cell = PENDING_ISOLATE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = cell.lock() {
+        *guard = Some(name.to_string());
+    }
+}
+
+/// Returns and clears any `ISOLATE` request that arrived since the last
+/// call - see `main.rs`'s event loop.
+pub fn take_pending_isolate() -> Option<String> {
+    let cell = PENDING_ISOLATE.get_or_init(|| Mutex::new(None));
+    cell.lock().ok()?.take()
+}
+
 pub fn spawn_listener() {
     thread::spawn(|| {
         if let Err(e) = run() {
@@ -92,7 +153,11 @@ fn handle(stream: UnixStream) {
     }
     let mut writer = stream;
 
-    let response = match line.trim() {
+    let trimmed = line.trim();
+    let (cmd, rest) = trimmed.split_once(' ').unwrap_or((trimmed, ""));
+    let rest = rest.trim();
+
+    let response = match cmd {
         "STATUS" => {
             signals::STATUS_DUMP_REQUESTED.store(true, Ordering::SeqCst);
             wait_for_fresh_status(Duration::from_millis(500))
@@ -102,7 +167,26 @@ fn handle(stream: UnixStream) {
             "reload requested - see the log for the outcome\n".to_string()
         }
         "PING" => "PONG\n".to_string(),
-        other => format!("unknown command '{}'\n", other.trim()),
+        "TARGETS" => targets_response(),
+        "ISOLATE" if rest.is_empty() => "usage: ISOLATE <target-name>\n".to_string(),
+        "ISOLATE" => {
+            request_isolate(rest);
+            format!("isolate to '{rest}' requested - see the log for the outcome\n")
+        }
+        "LAUNCH" if rest.is_empty() => "usage: LAUNCH <path> [args...]\n".to_string(),
+        "LAUNCH" => {
+            let mut parts = rest.split_whitespace();
+            // `.next()` can't fail here - `rest.is_empty()` was already
+            // ruled out by the guard above, so there's at least one token.
+            let path = parts.next().unwrap_or_default();
+            let args: Vec<String> = parts.map(str::to_string).collect();
+            match crate::apps::launch(path, &args) {
+                Ok(id) => format!("launched: {id}\n"),
+                Err(e) => format!("launch failed: {e}\n"),
+            }
+        }
+        "APPS" => format!("{}\n", crate::apps::list()),
+        other => format!("unknown command '{other}'\n"),
     };
 
     let _ = writer.write_all(response.as_bytes());

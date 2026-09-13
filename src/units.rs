@@ -28,7 +28,13 @@
 //!                `WatchdogSec=` (seconds - see
 //!                `supervisor::expired_watchdogs`), `X-Critical=(true|false)`,
 //!                `X-AfterReady=name,name` (`X-`-prefixed since it isn't
-//!                real systemd syntax - see `supervisor::wait_for_ready`)
+//!                real systemd syntax - see `supervisor::wait_for_ready`),
+//!                `Environment=KEY=VAL` (real systemd syntax: space-
+//!                separated for more than one on a line, and repeatable
+//!                across multiple `Environment=` lines - both accumulate
+//!                into the same list here), `WorkingDirectory=`,
+//!                `X-Target=name` (see `targets.rs` - `X-`-prefixed for
+//!                the same reason as `X-Critical=`/`X-AfterReady=`)
 //! The service name comes from the filename (`mitos-shell.service` ->
 //! `mitos-shell`), matching systemd's own convention.
 
@@ -96,6 +102,9 @@ fn parse_unit(path: &Path, text: &str) -> Result<ServiceDef, String> {
     let mut user = None;
     let mut group = None;
     let mut watchdog_timeout = None;
+    let mut environment: Vec<(String, String)> = Vec::new();
+    let mut working_dir = None;
+    let mut target = None;
 
     for raw_line in text.lines() {
         let line = raw_line.trim();
@@ -143,6 +152,9 @@ fn parse_unit(path: &Path, text: &str) -> Result<ServiceDef, String> {
             "User" => user = Some(value.to_string()),
             "Group" => group = Some(value.to_string()),
             "WatchdogSec" => watchdog_timeout = value.parse().ok().map(Duration::from_secs),
+            "Environment" => environment.extend(parse_env_pairs(value)),
+            "WorkingDirectory" => working_dir = Some(value.to_string()),
+            "X-Target" => target = Some(value.to_string()),
             _ => {} // unrecognized [Service] key: ignored, not rejected
         }
     }
@@ -169,7 +181,21 @@ fn parse_unit(path: &Path, text: &str) -> Result<ServiceDef, String> {
         user,
         group,
         watchdog_timeout,
+        environment,
+        working_dir,
+        target: target.unwrap_or_else(|| crate::targets::DEFAULT_TARGET.to_string()),
     })
+}
+
+/// Parses `Environment=`'s value: real systemd allows space-separated
+/// `KEY=VALUE` pairs on one line, and multiple `Environment=` lines that
+/// accumulate - both are handled the same way here (this function does
+/// the former; `parse_unit`'s `.extend()` on each call does the latter).
+fn parse_env_pairs(value: &str) -> Vec<(String, String)> {
+    value
+        .split_whitespace()
+        .filter_map(|pair| pair.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+        .collect()
 }
 
 #[cfg(test)]
@@ -229,5 +255,28 @@ mod tests {
     fn rejects_a_unit_with_no_execstart() {
         let text = "[Service]\nRestart=always\n";
         assert!(parse_unit(Path::new("x.service"), text).is_err());
+    }
+
+    #[test]
+    fn parses_environment_working_directory_and_target() {
+        let text = "[Service]\nExecStart=/usr/bin/web\nEnvironment=RUST_LOG=info PORT=8080\nEnvironment=EXTRA=1\nWorkingDirectory=/var/lib/web\nX-Target=graphical\n";
+        let svc = parse_unit(Path::new("web.service"), text).unwrap();
+        assert_eq!(
+            svc.environment,
+            vec![
+                ("RUST_LOG".to_string(), "info".to_string()),
+                ("PORT".to_string(), "8080".to_string()),
+                ("EXTRA".to_string(), "1".to_string()),
+            ]
+        );
+        assert_eq!(svc.working_dir.as_deref(), Some("/var/lib/web"));
+        assert_eq!(svc.target, "graphical");
+    }
+
+    #[test]
+    fn defaults_target_when_unspecified() {
+        let text = "[Service]\nExecStart=/usr/bin/web\n";
+        let svc = parse_unit(Path::new("web.service"), text).unwrap();
+        assert_eq!(svc.target, crate::targets::DEFAULT_TARGET);
     }
 }
