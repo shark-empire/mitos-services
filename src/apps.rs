@@ -143,7 +143,10 @@ pub fn launch(path: &str, args: &[String]) -> Result<String, String> {
     cmd.args(args);
     cmd.env_clear();
     cmd.env("MITOS_APP_ID", &id);
-    cmd.env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+    cmd.env(
+        "PATH",
+        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    );
     if let Ok(term) = std::env::var("TERM") {
         cmd.env("TERM", term);
     }

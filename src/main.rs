@@ -164,10 +164,7 @@ fn run_event_loop(
         }
 
         if signals::STATUS_DUMP_REQUESTED.swap(false, Ordering::SeqCst) {
-            let summary = format!(
-                "active target: {current_target}\n{}",
-                sup.status_summary()
-            );
+            let summary = format!("active target: {current_target}\n{}", sup.status_summary());
             logging::info(&summary);
             ipc::publish_status(&summary);
         }

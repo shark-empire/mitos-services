@@ -276,7 +276,10 @@ fn parse_env_list(value: &str) -> Vec<(String, String)> {
     value
         .split(',')
         .filter(|s| !s.is_empty())
-        .filter_map(|pair| pair.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+        .filter_map(|pair| {
+            pair.split_once('=')
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+        })
         .collect()
 }
 

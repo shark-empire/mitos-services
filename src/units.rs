@@ -194,7 +194,10 @@ fn parse_unit(path: &Path, text: &str) -> Result<ServiceDef, String> {
 fn parse_env_pairs(value: &str) -> Vec<(String, String)> {
     value
         .split_whitespace()
-        .filter_map(|pair| pair.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+        .filter_map(|pair| {
+            pair.split_once('=')
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+        })
         .collect()
 }
 

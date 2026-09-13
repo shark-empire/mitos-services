@@ -130,7 +130,12 @@ const BLOCKED_SYSCALLS: &[i32] = &[
 ];
 
 fn stmt(code: u16, k: u32) -> SockFilter {
-    SockFilter { code, jt: 0, jf: 0, k }
+    SockFilter {
+        code,
+        jt: 0,
+        jf: 0,
+        k,
+    }
 }
 
 fn jump(code: u16, k: u32, jt: u8, jf: u8) -> SockFilter {
