@@ -62,9 +62,13 @@ mitos-services-supervised service).
 ## mitosctl
 
 ```
-mitosctl status   # pid, ready/starting, critical or not, per service
-mitosctl reload   # same as SIGUSR1, but doesn't require knowing the pid
-mitosctl ping     # liveness check
+mitosctl status              # pid, ready/starting, critical or not, per service
+mitosctl reload               # same as SIGUSR1, but doesn't require knowing the pid
+mitosctl ping                  # liveness check
+mitosctl targets                # every configured target, and which one is active
+mitosctl isolate <target>        # switch which target's services are running
+mitosctl launch <path> [args...]  # sandboxed on-demand app launch - see apps.rs
+mitosctl apps                      # every currently-running launched app
 ```
 
 Talks to `/run/mitos-services/control.sock` over a plain newline-
@@ -75,15 +79,24 @@ for a handful of simple commands.
 ## Layout
 
 - `src/main.rs` - entry point: becomes a child subreaper
-  (`PR_SET_CHILD_SUBREAPER`), loads config, spawns services, runs the
-  event loop, acknowledges shutdown back to mitos-init
+  (`PR_SET_CHILD_SUBREAPER`), loads config, spawns the default target's
+  services, runs the event loop, acknowledges shutdown back to mitos-init
 - `src/supervisor.rs` - service spawning, restart policy, dependency
   ordering (`after=`/`after_ready=`), privilege dropping
 - `src/config.rs` - `/etc/mitos/init.conf` parsing
 - `src/units.rs` - `/etc/mitos/services.d/*.service` unit file parsing
-- `src/cgroups.rs` - per-service cgroup v2 (leaf cgroups only - mounting
-  and controller delegation happen in mitos-init, before this process
-  even exists)
+- `src/targets.rs` - named service groups you can switch between
+  (`mitosctl isolate`) - see "What's deliberately not here yet" below
+  for how this differs from real systemd's targets
+- `src/timers.rs` - `.timer`-equivalent scheduled/periodic activation of
+  a paired service
+- `src/apps.rs` - on-demand sandboxed launching of user applications,
+  distinct from the boot-time services `supervisor.rs` manages
+- `src/sandbox.rs` / `src/seccomp.rs` - the namespace/capability/syscall-
+  filter mechanics `apps.rs` applies to a launched app
+- `src/cgroups.rs` - per-service (and, nested under the same delegated
+  root, per-app) cgroup v2 leaf cgroups - mounting and controller
+  delegation happen in mitos-init, before this process even exists
 - `src/notify.rs` - the `sd_notify`-compatible readiness protocol
 - `src/rollback.rs` - transactional config reload
 - `src/users.rs` - `/etc/passwd`/`/etc/group` lookups for `user=`/`group=`
@@ -98,17 +111,21 @@ for a handful of simple commands.
 
 Flagged rather than silently missing:
 
-- **Targets** (`multi-user.target`, `graphical.target`, ...) - there's
-  currently one flat service list, not named groups you can switch
-  between (rescue mode is a mitos-init-level special case that bypasses
-  this process entirely, not a target).
-- **Timers** - no `.timer`-equivalent scheduled/periodic activation.
+- **PID namespace isolation for launched apps** (`src/apps.rs`) - real
+  isolation (mount/UTS/IPC namespaces, capability bounding set,
+  seccomp, a dedicated cgroup) is applied, but not a PID namespace -
+  see that module's doc comment for the double-fork subtlety involved
+  and why it's a follow-up rather than a first-version guess.
+- **`OnCalendar=`-style wall-clock timer scheduling** (`src/timers.rs`)
+  - only relative `OnBootSec=`/`OnUnitActiveSec=` intervals so far.
 
 Already built, despite being listed as future work in an earlier version
 of this file: dependency ordering beyond simple `After=` (`Before=`,
 `Requires=`, `Wants=` - see `INTEGRATION.md` for the intentionally
-narrower semantics vs real systemd) and watchdog pings (`WatchdogSec=`,
-`WATCHDOG=1` over the same notify socket `READY=1` uses).
+narrower semantics vs real systemd), watchdog pings (`WatchdogSec=`,
+`WATCHDOG=1` over the same notify socket `READY=1` uses), targets
+(`src/targets.rs`), timers (`src/timers.rs`), and on-demand sandboxed
+app launching (`src/apps.rs`, `APPS.md`).
 
 ## License
 

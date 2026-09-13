@@ -7,14 +7,24 @@ description = "MITOS's service manager - runs as a supervised child of mitos-ini
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# Notably lighter than mitos-init's own dependency list: none of the
+# Notably lighter than mitos-init's own dependency list: most of the
 # moved code (supervisor, cgroups, notify, rollback, users, config, IPC)
-# turned out to need libc directly - it's all nix wrappers or plain std.
-# libc is still needed here for one thing: PR_SET_CHILD_SUBREAPER, which
-# nix doesn't wrap (prctl's operation space is too broad for a single
-# high-level wrapper to cover).
+# turned out to need libc directly for at most a handful of things nix
+# doesn't wrap. Two exceptions pull in more of it: `main.rs`'s
+# `PR_SET_CHILD_SUBREAPER` (prctl's operation space is too broad for a
+# single high-level nix wrapper to cover), and `sandbox.rs`/`seccomp.rs`,
+# which need raw `unshare`/`mount`/`prctl` and the exact kernel ABI
+# structs (`sock_filter`/`sock_fprog`) for the app-launch sandbox -
+# nothing higher-level exists in `nix` for seccomp-bpf specifically.
 nix = { version = "0.27", features = ["process", "signal", "hostname"] }
 libc = "0.2"
+# Used once, in apps.rs, to hash a launched app's binary for its recorded
+# identity. Everything else in this crate is hand-rolled by design (see
+# config.rs's module doc) - hashing is the one exception, since a
+# hand-rolled SHA-256 is exactly the kind of thing worth a vetted
+# implementation instead. `default-features = false` drops std-only
+# extras (like OID support) this crate doesn't need.
+sha2 = { version = "0.10", default-features = false }
 
 # Same reasoning as mitos-init's profile: small, fast-loading binary,
 # no unwind machinery for a process whose error paths already return

@@ -13,8 +13,13 @@ loglevel=info
 # How long (seconds) shutdown waits for services to exit after SIGTERM
 # before sending SIGKILL.
 shutdown_timeout=5
+# Which target boots by default - see targets.rs. Services with no
+# target= of their own are placed in "multi-user", so leaving both this
+# and every service's own target= unset (as below) behaves exactly like
+# a config written before targets existed: one flat list, always run.
+default_target=multi-user
 
-# service <name> path=<binary> [args=a,b,c] [critical=true|false] [restart=always|on-failure|never] [mem_max=SIZE] [user=NAME] [group=NAME] [after=name,name] [after_ready=name,name] [before=name,name] [requires=name,name] [wants=name,name] [watchdog_sec=N]
+# service <name> path=<binary> [args=a,b,c] [critical=true|false] [restart=always|on-failure|never] [mem_max=SIZE] [user=NAME] [group=NAME] [after=name,name] [after_ready=name,name] [before=name,name] [requires=name,name] [wants=name,name] [watchdog_sec=N] [environment=KEY=VAL,KEY=VAL] [workdir=PATH] [target=NAME]
 #   critical: if this service exits, mitos-services begins system
 #             shutdown (relayed through mitos-init). Never restarted -
 #             the exit is treated as "the session is over", the same way
@@ -41,9 +46,22 @@ shutdown_timeout=5
 #             this often; a missed deadline is treated as a failure and
 #             the service is killed and restarted per its restart=
 #             policy. Omit for no watchdog (most services).
+#   environment: extra environment variables for this service, in
+#             addition to $NOTIFY_SOCKET. Comma-separated KEY=VAL pairs -
+#             use a .service unit file's space-separated Environment=
+#             instead if a value itself needs a comma.
+#   workdir:  chdir() here before exec. Omit to inherit mitos-services'
+#             own cwd.
+#   target:   which target (see default_target= above) this service
+#             belongs to. Omit for multi-user.
 service shell path=/bin/mitos-shell critical=true restart=never
 
 # Example showing ordering, readiness-gating, hard dependencies,
 # privilege dropping, and a watchdog:
 # service db path=/usr/bin/mitos-db user=mitos-db group=mitos-db restart=on-failure watchdog_sec=30
-# service web path=/usr/bin/mitos-web user=www-data requires=db after_ready=db restart=always mem_max=256M
+# service web path=/usr/bin/mitos-web user=www-data requires=db after_ready=db restart=always mem_max=256M environment=RUST_LOG=info workdir=/var/lib/mitos-web
+
+# Example putting the desktop stack behind a separate target, only
+# started once `mitosctl isolate graphical` (or a future display-manager
+# equivalent) asks for it - see targets.rs:
+# service mitos-gui path=/usr/bin/mitos-gui target=graphical restart=on-failure

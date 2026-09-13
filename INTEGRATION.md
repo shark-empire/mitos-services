@@ -69,6 +69,9 @@ All keys are optional except `ExecStart=`.
 | `Requires=name,name` | Hard dependency: if a named, configured service didn't end up running, this one is skipped too (logged, not fatal to boot). Also implies ordering, same as `After=`. |
 | `Wants=name,name` | Soft dependency: ordering only (same effect as `After=`), doesn't block this service if the named one fails or isn't configured. |
 | `WatchdogSec=` | Seconds. Expect `WATCHDOG=1` at least this often once started - see above. Omit for no watchdog (most services). |
+| `Environment=KEY=VAL` | Extra environment variable(s) for this service, in addition to `NOTIFY_SOCKET`. Space-separated for more than one on a line; repeat the key across multiple lines and they accumulate rather than replace. |
+| `WorkingDirectory=` | `chdir()` here before exec. Omit to inherit mitos-services' own cwd. |
+| `X-Target=name` | Which target (see below) this service belongs to. Omit for `multi-user`, the default. |
 
 A note on `Requires=`/`Wants=` since real systemd users will have
 expectations here: this project's semantics are intentionally narrower.
@@ -88,8 +91,36 @@ file is closer to portable than you might expect.
 The same options exist as `init.conf` inline fields if you'd rather not
 use a separate file per service: `path=`, `restart=`, `critical=`,
 `mem_max=`, `user=`, `group=`, `after=`, `after_ready=`, `before=`,
-`requires=`, `wants=`, `watchdog_sec=` - see
-`init.conf.example`.
+`requires=`, `wants=`, `watchdog_sec=`, `environment=` (comma-separated
+`KEY=VAL` pairs - a real `.service` file's space-separated
+`Environment=` line is the better choice if a value itself needs a
+comma), `workdir=`, `target=` - see `init.conf.example`.
+
+### Targets
+
+Every service belongs to exactly one target (`X-Target=`/`target=`,
+default `multi-user`); which one starts at boot is `init.conf`'s
+`default_target=` (also defaulting to `multi-user`, so a config written
+before this feature existed boots exactly as it always did). Switch at
+runtime with `mitosctl isolate <name>` or the `ISOLATE` control-socket
+command; list what's configured with `mitosctl targets`. See
+`src/targets.rs`'s module doc for how this differs from real systemd's
+targets - narrower on purpose, not an oversight.
+
+### Timers
+
+A `<name>.timer` file next to a `<name>.service` one in
+`services.d/` runs that service once, on a schedule, instead of (or in
+addition to) it being part of a target's supervised set - see
+`src/timers.rs`'s module doc for the two supported keys
+(`OnBootSec=`/`OnUnitActiveSec=`) and what's simplified vs real
+systemd's timers.
+
+### On-demand app launching
+
+Starting a user-facing application on request, as opposed to a
+boot-time service - a different problem with its own document:
+`APPS.md`.
 
 ## Restart policy and crash loops
 

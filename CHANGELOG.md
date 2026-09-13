@@ -8,6 +8,63 @@ mitos-init in one migration, not built up incrementally with CI feedback
 the way mitos-init's own history was. Treat this first version as
 untested even by the standards the rest of MITOS is held to.
 
+## [0.3.0] - Unreleased
+
+### Added
+- Targets (`src/targets.rs`): named service groups (`target=`/
+  `X-Target=`, default `multi-user`) you can switch between at runtime
+  with `mitosctl isolate <name>` / the `ISOLATE` control-socket command.
+  `default_target=` in `init.conf` picks what boots. Narrower than real
+  systemd's targets by design - see that module's doc comment.
+- Timers (`src/timers.rs`): a `<name>.timer` file next to a
+  `<name>.service` one runs that service once, on a relative schedule
+  (`OnBootSec=`/`OnUnitActiveSec=`), instead of it needing to be part of
+  a target's continuously-supervised set.
+- On-demand sandboxed app launching (`src/apps.rs`, `src/sandbox.rs`,
+  `src/seccomp.rs`, `APPS.md`): `LAUNCH <path> [args...]` and `APPS`
+  over the control socket (`mitosctl launch`/`mitosctl apps`). Applies a
+  fresh mount/UTS/IPC namespace, a private tmpfs `/tmp`,
+  `PR_SET_NO_NEW_PRIVS` plus a fully-dropped capability bounding set,
+  a conservative seccomp-bpf syscall deny-list, and a dedicated cgroup;
+  records a generated app id and a SHA-256 hash of the launched binary
+  as its identity. This is the "launch every third-party app in its own
+  sandbox" piece of MITOS's permission-model design, moved here from an
+  earlier mitos-init-centric sketch of it since the primitives it needs
+  already exist and are already exercised here for services - see
+  `apps.rs`'s module doc for the full rationale, and for what this
+  deliberately doesn't cover (PID namespace isolation; any actual
+  allow/deny policy - that stays with the not-yet-built `mitos-service`
+  policy daemon).
+- `Environment=`/`environment=` and `WorkingDirectory=`/`workdir=` for
+  services, unblocking the `Environment=RUST_LOG=info` this repo's own
+  `etc/mitos/services.d/mitos-settings.service` example already
+  specified, silently, before this - it was parsed as an unrecognized
+  key and dropped.
+- `ServiceDef`/`RestartPolicy` now derive `Default`, so adding a field
+  no longer means updating every test helper and `fallback_shell()` by
+  hand across three files - the direct cause of how the
+  `Environment=`/`WorkingDirectory=`/`target` fields above could be
+  added as a five-line diff in `supervisor.rs`'s test module instead of
+  a much larger one.
+
+### Fixed
+- `logging.rs` always tagged every line `mitos-init [...]`, copied
+  verbatim from mitos-init's own copy of this file during the split and
+  never updated - every mitos-services log line was misattributed to
+  the wrong binary. Now says `mitos-services`.
+- `defs_equal` (`supervisor.rs`, used by `reload_services` to decide
+  what actually changed) didn't compare the fields added here
+  (`environment`/`working_dir`/`target`) - a config reload that only
+  changed a service's environment or working directory would have been
+  silently treated as a no-op instead of restarting it.
+- `cgroups.rs`'s per-service functions are now thin wrappers over new
+  root-parameterized ones (`create_under`/`attach_under`/
+  `kill_and_remove_under`/`prepare_intermediate`), which is what lets
+  `apps.rs` get real cgroup v2 containment for launched apps, nested
+  under the same already-delegated root mitos-init sets up for
+  services, without mitos-init needing any change of its own. Existing
+  service call sites are unchanged.
+
 ## [0.2.0] - Unreleased
 
 ### Added

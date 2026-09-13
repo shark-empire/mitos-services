@@ -19,10 +19,13 @@ off the machine. A few habits worth keeping up:
   means every reboot/poweroff takes an extra 20 seconds it didn't need
   to.
 - **New parsing logic gets tests.** See the `#[cfg(test)]` modules in
-  `config.rs`/`units.rs`/`cgroups.rs`/`users.rs` for the existing
-  pattern. Logic that needs root or a real kernel (cgroups, the actual
-  supervision loop) doesn't have automated tests yet; that's what VM
-  testing is for.
+  `config.rs`/`units.rs`/`cgroups.rs`/`users.rs`/`targets.rs`/`timers.rs`
+  for the existing pattern. Logic that needs root or a real kernel
+  (cgroups, the actual supervision loop, and now `sandbox.rs`/
+  `seccomp.rs`'s namespace/capability/syscall-filter setup) doesn't have
+  automated tests yet; that's what VM testing is for. `seccomp.rs`
+  specifically has never been checked against a real kernel at all - see
+  its module doc before trusting it.
 
 ## Workflow
 
