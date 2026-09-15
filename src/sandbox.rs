@@ -40,6 +40,10 @@ use std::ffi::c_void;
 use std::os::raw::c_char;
 use std::ptr;
 
+// ============================================================================
+// App Sandbox (Used by apps.rs)
+// ============================================================================
+
 /// Precomputed in the parent (see the module doc for why) - the highest
 /// capability number this kernel knows about, so the bounding-set drop
 /// loop in `apply` covers every capability that exists here rather than
@@ -50,15 +54,8 @@ pub struct Sandbox {
     cap_last_cap: u32,
 }
 
-/// Used when `/proc/sys/kernel/cap_last_cap` can't be read (e.g. no procfs
-/// mounted) - `CAP_CHECKPOINT_RESTORE`, the highest capability defined as
-/// of Linux 5.9. Kernels newer than that just get a bounding-set drop
-/// that (harmlessly) also covers a few capability numbers the running
-/// kernel might not have defined yet.
 const FALLBACK_LAST_CAP: u32 = 40;
 
-/// Reads the current capability count. Call from the parent, before
-/// `fork()` - see the module doc.
 pub fn prepare() -> Sandbox {
     let cap_last_cap = std::fs::read_to_string("/proc/sys/kernel/cap_last_cap")
         .ok()
@@ -68,26 +65,86 @@ pub fn prepare() -> Sandbox {
 }
 
 impl Sandbox {
-    /// Applies every isolation step described in the module doc. Must be
-    /// called from inside `Command::pre_exec` (single-threaded child,
-    /// after `fork()`, before `exec()`) - see the module doc for why.
-    ///
-    /// # Safety
-    /// Makes raw `unshare(2)`/`mount(2)`/`prctl(2)` syscalls and, via
-    /// `seccomp::apply`, installs a syscall filter. Only sound to call
-    /// once, from the single thread that exists in a freshly-forked
-    /// child, with no further allocation between this call and `exec()`.
     pub unsafe fn apply(&self) -> std::io::Result<()> {
         namespaces()?;
         private_tmp()?;
         drop_privileges(self.cap_last_cap)?;
-        // Last: after this, any syscall not in seccomp.rs's allow set
-        // fails - so nothing below this line, and nothing above it may
-        // have relied on a syscall this filter blocks.
         crate::seccomp::apply()?;
         Ok(())
     }
 }
+
+// ============================================================================
+// Service Sandbox (Used by supervisor.rs)
+// ============================================================================
+
+/// Isolation options for system services (as opposed to on-demand apps
+/// in `apps.rs`). A service can opt into any combination of these -
+/// `supervisor.rs` reads them from the service's configuration and
+/// only applies the non-empty ones.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ServiceSandbox {
+    pub private_tmp: bool,
+    pub protect_system: bool,
+    pub no_new_privileges: bool,
+}
+
+impl ServiceSandbox {
+    /// True if none of the sandboxing options were requested - lets
+    /// `supervisor.rs` take the simpler/cheaper path of just using
+    /// `Command::uid`/`gid` without a `pre_exec` closure.
+    pub fn is_empty(&self) -> bool {
+        !self.private_tmp && !self.protect_system && !self.no_new_privileges
+    }
+
+    /// Applies the requested isolation steps. Must be called from inside
+    /// `Command::pre_exec` - see the module doc for why.
+    ///
+    /// # Safety
+    /// Same restrictions as `Sandbox::apply` - makes raw syscalls in the
+    /// single-threaded child before `exec()`.
+    pub unsafe fn apply(&self) -> std::io::Result<()> {
+        let needs_mounts = self.private_tmp || self.protect_system;
+
+        if needs_mounts {
+            // Only need a mount namespace for these (no UTS/IPC for services)
+            if libc::unshare(libc::CLONE_NEWNS) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // Make the new mounted tree private so changes don't propagate
+            let ret = libc::mount(
+                ptr::null::<c_char>(),
+                b"/\0".as_ptr() as *const c_char,
+                ptr::null::<c_char>(),
+                libc::MS_REC | libc::MS_PRIVATE,
+                ptr::null::<c_void>(),
+            );
+            if ret != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+
+        if self.private_tmp {
+            private_tmp()?;
+        }
+
+        if self.protect_system {
+            protect_system()?;
+        }
+
+        if self.no_new_privileges {
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Shared Primitives
+// ============================================================================
 
 unsafe fn namespaces() -> std::io::Result<()> {
     let flags = libc::CLONE_NEWNS | libc::CLONE_NEWUTS | libc::CLONE_NEWIPC;
@@ -95,9 +152,6 @@ unsafe fn namespaces() -> std::io::Result<()> {
         return Err(std::io::Error::last_os_error());
     }
 
-    // Recursively make every mount in this (now-private-to-us) namespace
-    // MS_PRIVATE, so nothing we mount or unmount from here propagates
-    // back to the host, and nothing the host does propagates to us.
     let ret = libc::mount(
         ptr::null::<c_char>(),
         b"/\0".as_ptr() as *const c_char,
@@ -125,16 +179,44 @@ unsafe fn private_tmp() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Implements `ProtectSystem=`-style isolation: bind-mounts `/usr`, `/boot`,
+/// and `/etc` over themselves and remounts them read-only. Paths that
+/// don't exist (or fail to bind-mount) are silently skipped rather than
+/// aborting the service launch.
+unsafe fn protect_system() -> std::io::Result<()> {
+    for path in [b"/usr\0", b"/boot\0", b"/etc\0"] {
+        let path_ptr = path.as_ptr() as *const c_char;
+
+        // First bind-mount the path onto itself.
+        let bind_ret = libc::mount(
+            path_ptr,
+            path_ptr,
+            ptr::null::<c_char>(),
+            libc::MS_BIND | libc::MS_REC,
+            ptr::null::<c_void>(),
+        );
+        if bind_ret != 0 {
+            // Path probably doesn't exist; skip it.
+            continue;
+        }
+
+        // Remount the bind-mount read-only.
+        let _ = libc::mount(
+            ptr::null::<c_char>(),
+            path_ptr,
+            ptr::null::<c_char>(),
+            libc::MS_REMOUNT | libc::MS_BIND | libc::MS_RDONLY | libc::MS_REC,
+            ptr::null::<c_void>(),
+        );
+    }
+    Ok(())
+}
+
 unsafe fn drop_privileges(cap_last_cap: u32) -> std::io::Result<()> {
     if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
         return Err(std::io::Error::last_os_error());
     }
     for cap in 0..=cap_last_cap {
-        // Best-effort, matching this crate's general style elsewhere
-        // (e.g. `notify.rs::chown_path`): a capability this kernel
-        // doesn't define, or one we're not permitted to drop in this
-        // context (e.g. already inside an unprivileged user namespace),
-        // isn't a reason to abort the whole launch.
         let _ = libc::prctl(libc::PR_CAPBSET_DROP, cap as libc::c_ulong, 0, 0, 0);
     }
     Ok(())
