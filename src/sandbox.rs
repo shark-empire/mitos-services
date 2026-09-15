@@ -133,13 +133,9 @@ impl ServiceSandbox {
             protect_system()?;
         }
 
-
-        if self.no_new_privileges
-            && libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
-        {
+        if self.no_new_privileges && libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
             return Err(std::io::Error::last_os_error());
         }
-
 
         Ok(())
     }
@@ -176,13 +172,12 @@ unsafe fn private_tmp() -> std::io::Result<()> {
         c"tmpfs".as_ptr(),
         libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
         c"size=64M,mode=1777".as_ptr() as *const c_void,
-      );
+    );
     if ret != 0 {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
 }
-
 
 /// Implements `ProtectSystem=`-style isolation: bind-mounts `/usr`, `/boot`,
 /// and `/etc` over themselves and remounts them read-only. Paths that
