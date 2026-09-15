@@ -71,6 +71,7 @@ const EPERM: u32 = 1;
 // prctl(2) (linux/prctl.h)
 const PR_SET_NO_NEW_PRIVS: c_int = 38;
 const PR_SET_SECCOMP: c_int = 22;
+#[allow(dead_code)]
 const PR_CAPBSET_DROP: c_int = 24;
 const SECCOMP_MODE_FILTER: c_ulong = 2;
 
