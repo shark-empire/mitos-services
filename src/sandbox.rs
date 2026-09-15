@@ -114,11 +114,12 @@ impl ServiceSandbox {
             // Make the new mounted tree private so changes don't propagate
             let ret = libc::mount(
                 ptr::null::<c_char>(),
-                b"/\0".as_ptr() as *const c_char,
+                c"/".as_ptr(), // Fixed
                 ptr::null::<c_char>(),
                 libc::MS_REC | libc::MS_PRIVATE,
                 ptr::null::<c_void>(),
             );
+
             if ret != 0 {
                 return Err(std::io::Error::last_os_error());
             }
@@ -132,11 +133,13 @@ impl ServiceSandbox {
             protect_system()?;
         }
 
-        if self.no_new_privileges {
-            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
+
+        if self.no_new_privileges
+            && libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+        {
+            return Err(std::io::Error::last_os_error());
         }
+
 
         Ok(())
     }
@@ -154,11 +157,12 @@ unsafe fn namespaces() -> std::io::Result<()> {
 
     let ret = libc::mount(
         ptr::null::<c_char>(),
-        b"/\0".as_ptr() as *const c_char,
+        c"/".as_ptr(), // Fixed
         ptr::null::<c_char>(),
         libc::MS_REC | libc::MS_PRIVATE,
         ptr::null::<c_void>(),
     );
+
     if ret != 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -167,17 +171,18 @@ unsafe fn namespaces() -> std::io::Result<()> {
 
 unsafe fn private_tmp() -> std::io::Result<()> {
     let ret = libc::mount(
-        b"tmpfs\0".as_ptr() as *const c_char,
-        b"/tmp\0".as_ptr() as *const c_char,
-        b"tmpfs\0".as_ptr() as *const c_char,
+        c"tmpfs".as_ptr(),
+        c"/tmp".as_ptr(),
+        c"tmpfs".as_ptr(),
         libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
-        b"size=64M,mode=1777\0".as_ptr() as *const c_void,
-    );
+        c"size=64M,mode=1777".as_ptr() as *const c_void,
+      );
     if ret != 0 {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
 }
+
 
 /// Implements `ProtectSystem=`-style isolation: bind-mounts `/usr`, `/boot`,
 /// and `/etc` over themselves and remounts them read-only. Paths that
