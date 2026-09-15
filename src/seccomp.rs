@@ -216,8 +216,8 @@ mod tests {
     #[test]
     fn program_is_well_formed() {
         let prog = build_program();
-        // 3 (arch check) + 2 per blocked syscall + 1 (final allow)
-        assert_eq!(prog.len(), 3 + BLOCKED_SYSCALLS.len() * 2 + 1);
+        // 4 (arch check + nr load) + 2 per blocked syscall + 1 (final allow)
+        assert_eq!(prog.len(), 4 + BLOCKED_SYSCALLS.len() * 2 + 1);
         // Every program must end in a RET so execution can't fall off
         // the end into undefined instructions.
         assert_eq!(prog.last().unwrap().code, BPF_RET | BPF_K);
