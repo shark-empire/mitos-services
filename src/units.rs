@@ -170,8 +170,8 @@ fn parse_unit(path: &Path, text: &str) -> Result<ServiceDef, String> {
                 // Real systemd accepts no/yes/full/strict; this project
                 // implements one level (see sandbox::protect_system), so
                 // anything but an explicit opt-out enables it.
-                protect_system = !value.eq_ignore_ascii_case("no")
-                    && !value.eq_ignore_ascii_case("false");
+                protect_system =
+                    !value.eq_ignore_ascii_case("no") && !value.eq_ignore_ascii_case("false");
             }
             "OOMScoreAdjust" => oom_score_adjust = value.parse().ok(),
             _ => {} // unrecognized [Service] key: ignored, not rejected

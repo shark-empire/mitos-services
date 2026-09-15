@@ -107,6 +107,9 @@ mod tests {
         // The first 10 lines should have been evicted; line 10 is the
         // oldest survivor.
         assert!(all[0].contains("line 10"));
-        assert!(all.last().unwrap().contains(&format!("line {}", MAX_LINES + 9)));
+        assert!(all
+            .last()
+            .unwrap()
+            .contains(&format!("line {}", MAX_LINES + 9)));
     }
 }
