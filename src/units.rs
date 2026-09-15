@@ -34,7 +34,12 @@
 //!                across multiple `Environment=` lines - both accumulate
 //!                into the same list here), `WorkingDirectory=`,
 //!                `X-Target=name` (see `targets.rs` - `X-`-prefixed for
-//!                the same reason as `X-Critical=`/`X-AfterReady=`)
+//!                the same reason as `X-Critical=`/`X-AfterReady=`),
+//!                `PrivateTmp=`/`NoNewPrivileges=(true|false)`,
+//!                `ProtectSystem=(no|yes|full|strict)` (accepted for
+//!                compatibility with real unit files, but treated as a
+//!                single on/off switch - see `sandbox::protect_system`),
+//!                `OOMScoreAdjust=` (-1000 to 1000 - see `oom.rs`)
 //! The service name comes from the filename (`mitos-shell.service` ->
 //! `mitos-shell`), matching systemd's own convention.
 
@@ -105,6 +110,10 @@ fn parse_unit(path: &Path, text: &str) -> Result<ServiceDef, String> {
     let mut environment: Vec<(String, String)> = Vec::new();
     let mut working_dir = None;
     let mut target = None;
+    let mut private_tmp = false;
+    let mut protect_system = false;
+    let mut no_new_privileges = false;
+    let mut oom_score_adjust = None;
 
     for raw_line in text.lines() {
         let line = raw_line.trim();
@@ -155,6 +164,16 @@ fn parse_unit(path: &Path, text: &str) -> Result<ServiceDef, String> {
             "Environment" => environment.extend(parse_env_pairs(value)),
             "WorkingDirectory" => working_dir = Some(value.to_string()),
             "X-Target" => target = Some(value.to_string()),
+            "PrivateTmp" => private_tmp = value.eq_ignore_ascii_case("true"),
+            "NoNewPrivileges" => no_new_privileges = value.eq_ignore_ascii_case("true"),
+            "ProtectSystem" => {
+                // Real systemd accepts no/yes/full/strict; this project
+                // implements one level (see sandbox::protect_system), so
+                // anything but an explicit opt-out enables it.
+                protect_system = !value.eq_ignore_ascii_case("no")
+                    && !value.eq_ignore_ascii_case("false");
+            }
+            "OOMScoreAdjust" => oom_score_adjust = value.parse().ok(),
             _ => {} // unrecognized [Service] key: ignored, not rejected
         }
     }
@@ -184,6 +203,10 @@ fn parse_unit(path: &Path, text: &str) -> Result<ServiceDef, String> {
         environment,
         working_dir,
         target: target.unwrap_or_else(|| crate::targets::DEFAULT_TARGET.to_string()),
+        private_tmp,
+        protect_system,
+        no_new_privileges,
+        oom_score_adjust,
     })
 }
 
@@ -281,5 +304,44 @@ mod tests {
         let text = "[Service]\nExecStart=/usr/bin/web\n";
         let svc = parse_unit(Path::new("web.service"), text).unwrap();
         assert_eq!(svc.target, crate::targets::DEFAULT_TARGET);
+    }
+
+    #[test]
+    fn parses_sandboxing_keys() {
+        let text = "[Service]\nExecStart=/usr/bin/web\nPrivateTmp=true\nNoNewPrivileges=true\nProtectSystem=full\n";
+        let svc = parse_unit(Path::new("web.service"), text).unwrap();
+        assert!(svc.private_tmp);
+        assert!(svc.no_new_privileges);
+        assert!(svc.protect_system);
+    }
+
+    #[test]
+    fn protect_system_no_means_disabled() {
+        let text = "[Service]\nExecStart=/usr/bin/web\nProtectSystem=no\n";
+        let svc = parse_unit(Path::new("web.service"), text).unwrap();
+        assert!(!svc.protect_system);
+    }
+
+    #[test]
+    fn sandboxing_keys_default_to_false() {
+        let text = "[Service]\nExecStart=/usr/bin/web\n";
+        let svc = parse_unit(Path::new("web.service"), text).unwrap();
+        assert!(!svc.private_tmp);
+        assert!(!svc.no_new_privileges);
+        assert!(!svc.protect_system);
+    }
+
+    #[test]
+    fn parses_oom_score_adjust() {
+        let text = "[Service]\nExecStart=/usr/bin/web\nOOMScoreAdjust=-500\n";
+        let svc = parse_unit(Path::new("web.service"), text).unwrap();
+        assert_eq!(svc.oom_score_adjust, Some(-500));
+    }
+
+    #[test]
+    fn oom_score_adjust_defaults_to_none() {
+        let text = "[Service]\nExecStart=/usr/bin/web\n";
+        let svc = parse_unit(Path::new("web.service"), text).unwrap();
+        assert_eq!(svc.oom_score_adjust, None);
     }
 }

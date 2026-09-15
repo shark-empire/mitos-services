@@ -13,8 +13,10 @@ mod cgroups;
 mod config;
 mod error;
 mod ipc;
+mod journal;
 mod logging;
 mod notify;
+mod oom;
 mod rollback;
 mod sandbox;
 mod seccomp;
@@ -72,6 +74,7 @@ fn main() {
     }
 
     ipc::spawn_listener();
+    oom::spawn_monitor();
 
     let current_target = cfg.default_target.clone();
     ipc::publish_targets(&current_target, &targets::list(&cfg.services));

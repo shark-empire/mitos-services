@@ -186,10 +186,21 @@ fn handle(stream: UnixStream) {
             }
         }
         "APPS" => format!("{}\n", crate::apps::list()),
+        "LOGS" => logs_response(rest),
         other => format!("unknown command '{other}'\n"),
     };
 
     let _ = writer.write_all(response.as_bytes());
+}
+
+fn logs_response(filter: &str) -> String {
+    let lines = crate::journal::recent(filter);
+    if lines.is_empty() {
+        return "no matching log lines buffered\n".to_string();
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
 }
 
 /// `STATUS_DUMP_REQUESTED` is consumed by the main loop asynchronously,

@@ -60,6 +60,7 @@ fn write_line(level: Level, tag: &str, msg: &str) {
         return;
     }
     let line = format!("mitos-services [{tag:>4}] [{:>8.3}] {msg}\n", uptime_secs());
+    crate::journal::record(&line);
 
     // Prefer /dev/kmsg so the message survives in `dmesg` even before a
     // syslog daemon exists; fall back to stdout/stderr.

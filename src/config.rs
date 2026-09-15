@@ -74,9 +74,25 @@ pub struct ServiceDef {
     /// `X-Target=` (unit files) / `target=` (`init.conf` inline).
     /// Left empty by `Default`/test code, same as every other field here
     /// - real configured services always get a concrete value (defaulted
-    /// to `targets::DEFAULT_TARGET`) from `parse_service`/`parse_unit`,
-    /// never from this struct's own `Default` impl.
+    ///   to `targets::DEFAULT_TARGET`) from `parse_service`/`parse_unit`,
+    ///   never from this struct's own `Default` impl.
     pub target: String,
+    /// `PrivateTmp=`/`private_tmp=` - a private tmpfs `/tmp` for this
+    /// service. See `sandbox::ServiceSandbox`.
+    pub private_tmp: bool,
+    /// `ProtectSystem=`/`protect_system=` - `/usr`, `/boot`, and `/etc`
+    /// made read-only for this service. See `sandbox::ServiceSandbox`.
+    pub protect_system: bool,
+    /// `NoNewPrivileges=`/`no_new_privileges=` - this service (and
+    /// anything it execs) can never gain privileges it doesn't already
+    /// have, even via a setuid or file-capability binary. See
+    /// `sandbox::ServiceSandbox`.
+    pub no_new_privileges: bool,
+    /// `OOMScoreAdjust=`/`oom_score_adjust=` - adjusts how likely the
+    /// kernel's OOM killer is to pick this service first (-1000 to
+    /// 1000, more negative is more protected). `None` leaves the
+    /// kernel's default alone. See `oom.rs`.
+    pub oom_score_adjust: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -212,6 +228,10 @@ fn parse_service(rest: &str) -> std::result::Result<ServiceDef, String> {
     let mut environment = Vec::new();
     let mut working_dir = None;
     let mut target = None;
+    let mut private_tmp = false;
+    let mut protect_system = false;
+    let mut no_new_privileges = false;
+    let mut oom_score_adjust = None;
 
     for field in parts {
         let (key, value) = field
@@ -241,6 +261,10 @@ fn parse_service(rest: &str) -> std::result::Result<ServiceDef, String> {
             "environment" => environment = parse_env_list(value),
             "workdir" => working_dir = Some(value.to_string()),
             "target" => target = Some(value.to_string()),
+            "private_tmp" => private_tmp = value.eq_ignore_ascii_case("true"),
+            "protect_system" => protect_system = value.eq_ignore_ascii_case("true"),
+            "no_new_privileges" => no_new_privileges = value.eq_ignore_ascii_case("true"),
+            "oom_score_adjust" => oom_score_adjust = value.parse().ok(),
             _ => {}
         }
     }
@@ -264,6 +288,10 @@ fn parse_service(rest: &str) -> std::result::Result<ServiceDef, String> {
         environment,
         working_dir,
         target: target.unwrap_or_else(|| crate::targets::DEFAULT_TARGET.to_string()),
+        private_tmp,
+        protect_system,
+        no_new_privileges,
+        oom_score_adjust,
     })
 }
 
@@ -388,5 +416,22 @@ mod tests {
     fn parses_default_target() {
         let cfg = parse("default_target=graphical\n");
         assert_eq!(cfg.default_target, "graphical");
+    }
+
+    #[test]
+    fn parses_sandboxing_fields() {
+        let cfg = parse(
+            "service web path=/usr/bin/web private_tmp=true protect_system=true no_new_privileges=true\n",
+        );
+        let svc = &cfg.services[0];
+        assert!(svc.private_tmp);
+        assert!(svc.protect_system);
+        assert!(svc.no_new_privileges);
+    }
+
+    #[test]
+    fn parses_oom_score_adjust() {
+        let cfg = parse("service web path=/usr/bin/web oom_score_adjust=-500\n");
+        assert_eq!(cfg.services[0].oom_score_adjust, Some(-500));
     }
 }

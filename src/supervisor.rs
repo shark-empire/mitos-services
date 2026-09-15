@@ -5,7 +5,6 @@
 //! Beyond plain pid tracking, wired in here:
 //! - Every service gets a cgroup (`cgroups.rs`) so teardown can reach
 //!   grandchildren the tracked pid alone never could.
-
 //! - `spawn_all` folds `before=`/`requires=`/`wants=` into an effective
 //!   `after` list (`effective_after`), orders services by it
 //!   (`topological_order`), enforces `requires=` (skip if the required
@@ -14,6 +13,14 @@
 //!   dependent (`wait_for_ready`).
 //! - Services can run as a specific `user`/`group` (`users.rs`) instead
 //!   of inheriting mitos-init's own root privileges.
+//! - A service can opt into namespace/mount sandboxing
+//!   (`PrivateTmp=`/`ProtectSystem=`/`NoNewPrivileges=` - see
+//!   `sandbox::ServiceSandbox`). Combining that with `user=`/`group=`
+//!   needs care - see `sandbox.rs`'s module doc for why `spawn_with_history`
+//!   drops privileges by hand in that case instead of via `Command::uid`/
+//!   `gid`, confirmed against the standard library's own `do_exec`
+//!   (`library/std/src/sys/unix/process/process_unix.rs`): `pre_exec`
+//!   closures run *after* `Command::uid`/`gid`/`chdir`, not before.
 
 use crate::config::{RestartPolicy, ServiceDef};
 use crate::logging;
@@ -78,7 +85,6 @@ impl Supervisor {
     /// `after_ready` dependency's actual readiness before starting the
     /// dependent (`wait_for_ready`). Only used for the initial boot spawn
     /// - `reload_services` deliberately doesn't re-order, re-wait, or
-    /// * List item heading
     ///   re-enforce `requires=` on an already-running system.
     pub fn spawn_all(&mut self, defs: &[ServiceDef]) {
         let ordered = topological_order(&effective_after(defs));
@@ -197,11 +203,55 @@ impl Supervisor {
         if let Some(dir) = &def.working_dir {
             cmd.current_dir(dir);
         }
-        if let Some(u) = uid {
-            cmd.uid(u);
-        }
-        if let Some(g) = gid {
-            cmd.gid(g);
+        let sandbox = crate::sandbox::ServiceSandbox {
+            private_tmp: def.private_tmp,
+            protect_system: def.protect_system,
+            no_new_privileges: def.no_new_privileges,
+        };
+        if sandbox.is_empty() {
+            // No sandboxing requested: Command's own privilege drop is
+            // fine as it is here, and simpler/lower-risk than doing it
+            // by hand.
+            if let Some(u) = uid {
+                cmd.uid(u);
+            }
+            if let Some(g) = gid {
+                cmd.gid(g);
+            }
+        } else {
+            // Sandboxing requested: Command::uid()/gid() apply *before*
+            // any pre_exec closure runs (see sandbox.rs's module doc),
+            // which would drop CAP_SYS_ADMIN before the sandbox's own
+            // unshare()/mount() calls get a chance to run. So when both
+            // are needed, the privilege drop has to happen by hand,
+            // inside this same pre_exec closure, after the sandbox is
+            // set up - never via Command::uid()/gid() for this branch.
+            //
+            // SAFETY: `sandbox.apply()` and the manual setgroups/setgid/
+            // setuid calls below are the entire body of this pre_exec
+            // closure, all captured values are owned Copy types (no
+            // allocation in the closure itself) - see sandbox.rs's
+            // module doc for what pre_exec allows.
+            unsafe {
+                cmd.pre_exec(move || {
+                    sandbox.apply()?;
+                    if let Some(g) = gid {
+                        // Same order and same "best-effort" reasoning
+                        // std's own Command::gid() uses for this exact
+                        // call - see sandbox.rs's module doc.
+                        let _ = libc::setgroups(0, std::ptr::null());
+                        if libc::setgid(g) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    }
+                    if let Some(u) = uid {
+                        if libc::setuid(u) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    }
+                    Ok(())
+                });
+            }
         }
 
         match cmd.spawn() {
@@ -213,6 +263,9 @@ impl Supervisor {
                 ));
                 crate::cgroups::create_for(&def.name, def.memory_limit);
                 crate::cgroups::attach(&def.name, pid);
+                if let Some(score) = def.oom_score_adjust {
+                    crate::oom::set_score_adjust(pid, score);
+                }
                 self.services.insert(
                     pid,
                     Supervised {
@@ -544,6 +597,10 @@ fn defs_equal(a: &ServiceDef, b: &ServiceDef) -> bool {
         && a.environment == b.environment
         && a.working_dir == b.working_dir
         && a.target == b.target
+        && a.private_tmp == b.private_tmp
+        && a.protect_system == b.protect_system
+        && a.no_new_privileges == b.no_new_privileges
+        && a.oom_score_adjust == b.oom_score_adjust
 }
 
 fn fallback_shell() -> ServiceDef {
