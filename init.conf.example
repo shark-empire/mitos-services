@@ -54,6 +54,17 @@ default_target=multi-user
 #             own cwd.
 #   target:   which target (see default_target= above) this service
 #             belongs to. Omit for multi-user.
+#   private_tmp: true gives this service a private, size-capped tmpfs
+#             /tmp in its own mount namespace.
+#   protect_system: true read-only-remounts /usr, /boot, and /etc for
+#             this service (in the same private mount namespace
+#             private_tmp uses, sharing it if both are set).
+#   no_new_privileges: true stops this service (and anything it execs)
+#             from ever gaining privileges it doesn't already have, even
+#             via a setuid or file-capability binary.
+#   oom_score_adjust: -1000 to 1000 - adjusts how likely the kernel's
+#             OOM killer is to pick this service first. More negative is
+#             more protected. Omit to leave the kernel's default alone.
 service shell path=/bin/mitos-shell critical=true restart=never
 
 # Example showing ordering, readiness-gating, hard dependencies,
@@ -65,3 +76,8 @@ service shell path=/bin/mitos-shell critical=true restart=never
 # started once `mitosctl isolate graphical` (or a future display-manager
 # equivalent) asks for it - see targets.rs:
 # service mitos-gui path=/usr/bin/mitos-gui target=graphical restart=on-failure
+
+# Example combining sandboxing with privilege dropping and OOM
+# protection - a database is exactly the kind of service worth
+# insulating from a runaway sibling process getting killed instead of it:
+# service db path=/usr/bin/mitos-db user=mitos-db group=mitos-db restart=on-failure private_tmp=true protect_system=true no_new_privileges=true oom_score_adjust=-500

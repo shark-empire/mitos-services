@@ -3,10 +3,18 @@
 All notable changes to mitos-services are documented here. Format
 loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-This project is pre-1.0 and has never been run - it was split out of
-mitos-init in one migration, not built up incrementally with CI feedback
-the way mitos-init's own history was. Treat this first version as
-untested even by the standards the rest of MITOS is held to.
+This project is pre-1.0. It was split out of mitos-init in one
+migration rather than built up incrementally with CI feedback the way
+mitos-init's own history was, and its first real `cargo check`/
+`clippy`/`fmt`/`test` run (see `[0.3.0]` below) found several issues a
+compiler and a test runner catch that a read-through alone can't. That
+round-trip has now happened at the compile/lint/pure-logic-test level -
+what `cargo test` can exercise without root or a real kernel. Nothing
+here has been run as PID 1's supervised child, with real cgroups, real
+namespaces, or a real seccomp filter installed, on an actual machine
+yet. Treat anything that needs root or a kernel (cgroups, mount
+namespaces, the sandbox, the actual supervision loop) as untested until
+it has been.
 
 ## [0.3.0] - Unreleased
 
@@ -46,6 +54,27 @@ untested even by the standards the rest of MITOS is held to.
   `Environment=`/`WorkingDirectory=`/`target` fields above could be
   added as a five-line diff in `supervisor.rs`'s test module instead of
   a much larger one.
+- Opt-in service sandboxing (`src/sandbox.rs`'s new `ServiceSandbox`):
+  `PrivateTmp=`, `ProtectSystem=`, `NoNewPrivileges=` for an ordinary
+  supervised service - real unit-file keys this repo's own example
+  services (`mitos-gui.service`, `mitos-settings.service`) already
+  specified and had silently ignored. Combined with `User=`/`Group=`,
+  the privilege drop now happens by hand inside the same `pre_exec`
+  closure that sets up the sandbox, confirmed necessary against the
+  standard library's own `do_exec` source: `Command::uid`/`gid` are
+  applied *before* `pre_exec` runs, not after, which would otherwise
+  drop `CAP_SYS_ADMIN` before the sandbox's `unshare()`/`mount()` calls
+  get to run.
+- `OOMScoreAdjust=`/`oom_score_adjust=` (`src/oom.rs`) and a background
+  memory-pressure monitor thread that logs a warning when
+  `/proc/pressure/memory` crosses a threshold. Deliberately observability
+  only for now - see that module's doc comment for why proactively
+  stopping or throttling services under pressure is left as a follow-up
+  policy decision rather than guessed at here.
+- `mitosctl logs [filter]` / the `LOGS` control-socket command
+  (`src/journal.rs`): a small, in-memory, 2000-line-capped buffer of
+  recent log output, independent of wherever `logging.rs`'s primary
+  output (`/dev/kmsg` or stdout/stderr) ends up being collected.
 
 ### Fixed
 - `logging.rs` always tagged every line `mitos-init [...]`, copied
@@ -64,6 +93,29 @@ untested even by the standards the rest of MITOS is held to.
   under the same already-delegated root mitos-init sets up for
   services, without mitos-init needing any change of its own. Existing
   service call sites are unchanged.
+- Everything below this line is what an actual `cargo check`/`clippy`/
+  `test` run (this crate's first - see the note at the top of this file)
+  found, not a self-review:
+  - `seccomp.rs`'s `program_is_well_formed` test undercounted the
+    filter's fixed header by one instruction (4 - load arch, compare,
+    kill, load nr - not 3), so it failed against the real, correctly-built
+    filter. The bug was in the test's arithmetic, not `build_program`
+    itself: 27 blocked syscalls × 2 + 4 + 1 = 59, exactly what the real
+    filter produced.
+  - `seccomp.rs` also had one genuinely unused constant
+    (`PR_CAPBSET_DROP`, left over from before capability-bounding-set
+    dropping moved to `sandbox.rs`) and, in `sandbox.rs`, five manually
+    null-terminated byte strings (`b"...\0".as_ptr() as *const c_char`)
+    that `clippy::manual_c_str_literals` correctly flagged in favor of
+    plain `c"..."` literals - available and preferred on this project's
+    toolchain (1.98.1).
+  - Two doc comments (`apps.rs`, `config.rs`) had an unindented
+    continuation line after a `-`-prefixed sentence, which
+    `clippy::doc_lazy_continuation` reads as a new, separate (and here,
+    incomplete) list item rather than the flowing sentence it was meant
+    to be.
+  - A stray, out-of-place doc-comment line (`supervisor.rs`, on
+    `spawn_all`) had broken a sentence into nonsense; removed.
 
 ## [0.2.0] - Unreleased
 
