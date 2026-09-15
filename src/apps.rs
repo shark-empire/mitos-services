@@ -189,8 +189,8 @@ pub fn launch(path: &str, args: &[String]) -> Result<String, String> {
 /// # Safety note
 /// `pre_exec`'s closure runs after `fork()` in the child, before `exec()`
 /// - see `sandbox.rs`'s module doc for what is and isn't safe to do
-/// there. Everything the closure touches (`sandbox`) was already fully
-/// built in the parent before this call.
+///   there. Everything the closure touches (`sandbox`) was already fully
+///   built in the parent before this call.
 fn apply_sandbox_on_exec(cmd: &mut Command, sandbox: Sandbox) {
     unsafe {
         cmd.pre_exec(move || sandbox.apply());
