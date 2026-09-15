@@ -1,10 +1,12 @@
 # Security Policy
 
 mitos-services runs as root (though not as PID 1 - see mitos-init's own
-`SECURITY.md` for that boundary), and this project is pre-1.0 and has
-never been run at all yet (see CHANGELOG.md) - please report anything
-that looks like a security issue rather than opening a public issue for
-it first.
+`SECURITY.md` for that boundary), and this project is pre-1.0; see
+CHANGELOG.md for exactly what has and hasn't been exercised so far
+(compiled and unit-tested, yes; run as PID 1's supervised child with
+real cgroups/namespaces/seccomp on an actual machine, not yet) - please
+report anything that looks like a security issue rather than opening a
+public issue for it first.
 
 ## Reporting a vulnerability
 
@@ -23,11 +25,17 @@ permission/ownership model - `notify.rs`) or influence the control
 socket (`ipc.rs`, restricted to `0600`); memory-safety issues in the
 `unsafe` code in `main.rs` (`PR_SET_CHILD_SUBREAPER`) and, the larger
 surface, `sandbox.rs`/`seccomp.rs` (namespace/mount/capability/seccomp
-setup for a launched app - see `apps.rs`'s module doc, and note its
-seccomp filter is explicitly flagged there as reviewed but not yet
-exercised on real hardware); a launched app escaping the isolation
-`sandbox.rs` is supposed to apply, or a service escaping the resource
-limits or teardown guarantees its cgroup is supposed to provide.
+setup shared by `apps.rs`'s fixed, unconditional app sandbox and
+`supervisor.rs`'s opt-in per-service one - see `apps.rs`'s module doc,
+and note the seccomp filter is explicitly flagged there as reviewed but
+not yet exercised on real hardware); the manual `setgroups`/`setgid`/
+`setuid` sequence `supervisor.rs` uses instead of `Command::uid`/`gid`
+whenever a service combines `User=`/`Group=` with any sandboxing
+directive (see `sandbox.rs`'s module doc for why, and note it's meant to
+mirror the standard library's own ordering exactly - a divergence there
+is a bug); a launched app or sandboxed service escaping the isolation
+it's supposed to have, or a service escaping the resource limits or
+teardown guarantees its cgroup is supposed to provide.
 
 Known, already-documented limitations that are *not* new reports:
 config/unit files are trusted as-is with no permission or signature

@@ -72,6 +72,18 @@ All keys are optional except `ExecStart=`.
 | `Environment=KEY=VAL` | Extra environment variable(s) for this service, in addition to `NOTIFY_SOCKET`. Space-separated for more than one on a line; repeat the key across multiple lines and they accumulate rather than replace. |
 | `WorkingDirectory=` | `chdir()` here before exec. Omit to inherit mitos-services' own cwd. |
 | `X-Target=name` | Which target (see below) this service belongs to. Omit for `multi-user`, the default. |
+| `PrivateTmp=` | `true`/`false`. A private, size-capped tmpfs `/tmp` for this service, in its own mount namespace. |
+| `ProtectSystem=` | `no`/`yes`/`full`/`strict` accepted (for compatibility with real unit files), but treated as one on/off switch: anything but an explicit `no` read-only-remounts `/usr`, `/boot`, and `/etc` for this service. |
+| `NoNewPrivileges=` | `true`/`false`. This service (and anything it execs) can never gain privileges it doesn't already have via a setuid or file-capability binary. |
+| `OOMScoreAdjust=` | -1000 to 1000. Adjusts how likely the kernel's OOM killer is to pick this service first - more negative is more protected. See `src/oom.rs`. |
+
+`PrivateTmp=`/`ProtectSystem=` both need their own mount namespace to
+mean anything, so setting either one implies the other's underlying
+`unshare()` too - see `sandbox::ServiceSandbox`. Combined with `User=`/
+`Group=`, the privilege drop happens by hand rather than through
+`Command`'s own mechanism, because of an ordering constraint in the
+standard library - see `sandbox.rs`'s module doc if you're curious why,
+though it shouldn't matter for how you use either directive.
 
 A note on `Requires=`/`Wants=` since real systemd users will have
 expectations here: this project's semantics are intentionally narrower.
@@ -94,7 +106,9 @@ use a separate file per service: `path=`, `restart=`, `critical=`,
 `requires=`, `wants=`, `watchdog_sec=`, `environment=` (comma-separated
 `KEY=VAL` pairs - a real `.service` file's space-separated
 `Environment=` line is the better choice if a value itself needs a
-comma), `workdir=`, `target=` - see `init.conf.example`.
+comma), `workdir=`, `target=`, `private_tmp=`, `protect_system=` (plain
+`true`/`false` only in this format - no `full`/`strict` distinction),
+`no_new_privileges=`, `oom_score_adjust=` - see `init.conf.example`.
 
 ### Targets
 
@@ -121,6 +135,28 @@ systemd's timers.
 Starting a user-facing application on request, as opposed to a
 boot-time service - a different problem with its own document:
 `APPS.md`.
+
+### Service sandboxing and OOM tuning
+
+`PrivateTmp=`/`ProtectSystem=`/`NoNewPrivileges=` (see the table above)
+give an ordinary supervised service some of the same isolation
+`apps.rs` applies unconditionally to launched apps, opt-in and
+independently togglable per directive - see `src/sandbox.rs`'s module
+doc for the underlying mechanics and `src/supervisor.rs`'s for how they
+compose with `User=`/`Group=`.
+
+`OOMScoreAdjust=` and a background memory-pressure (PSI) monitor are in
+`src/oom.rs` - the monitor logs a warning when `/proc/pressure/memory`
+crosses a threshold, it doesn't act on it. See that module's doc
+comment for why proactive throttling is deliberately not here yet.
+
+### Logs
+
+`mitosctl logs [filter]` (or the `LOGS` control-socket command) returns
+recent buffered log lines, optionally filtered to those containing
+`filter` as a substring (a service name works well for this). This is a
+small, in-memory, size-capped convenience buffer - see `src/journal.rs`'s
+module doc for what it is and isn't a substitute for.
 
 ## Restart policy and crash loops
 

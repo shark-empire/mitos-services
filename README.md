@@ -69,6 +69,7 @@ mitosctl targets                # every configured target, and which one is acti
 mitosctl isolate <target>        # switch which target's services are running
 mitosctl launch <path> [args...]  # sandboxed on-demand app launch - see apps.rs
 mitosctl apps                      # every currently-running launched app
+mitosctl logs [filter]              # recent buffered log lines - see journal.rs
 ```
 
 Talks to `/run/mitos-services/control.sock` over a plain newline-
@@ -82,7 +83,9 @@ for a handful of simple commands.
   (`PR_SET_CHILD_SUBREAPER`), loads config, spawns the default target's
   services, runs the event loop, acknowledges shutdown back to mitos-init
 - `src/supervisor.rs` - service spawning, restart policy, dependency
-  ordering (`after=`/`after_ready=`), privilege dropping
+  ordering (`after=`/`after_ready=`), privilege dropping (by hand, in a
+  specific order, when combined with a service's own sandboxing - see
+  `sandbox.rs`'s module doc)
 - `src/config.rs` - `/etc/mitos/init.conf` parsing
 - `src/units.rs` - `/etc/mitos/services.d/*.service` unit file parsing
 - `src/targets.rs` - named service groups you can switch between
@@ -93,7 +96,13 @@ for a handful of simple commands.
 - `src/apps.rs` - on-demand sandboxed launching of user applications,
   distinct from the boot-time services `supervisor.rs` manages
 - `src/sandbox.rs` / `src/seccomp.rs` - the namespace/capability/syscall-
-  filter mechanics `apps.rs` applies to a launched app
+  filter mechanics behind both `apps.rs`'s fixed, unconditional app
+  sandbox and services' own opt-in `PrivateTmp=`/`ProtectSystem=`/
+  `NoNewPrivileges=`
+- `src/oom.rs` - `OOMScoreAdjust=` and a background memory-pressure
+  (PSI) monitor thread
+- `src/journal.rs` - the in-memory, size-capped buffer behind
+  `mitosctl logs`
 - `src/cgroups.rs` - per-service (and, nested under the same delegated
   root, per-app) cgroup v2 leaf cgroups - mounting and controller
   delegation happen in mitos-init, before this process even exists
@@ -118,14 +127,29 @@ Flagged rather than silently missing:
   and why it's a follow-up rather than a first-version guess.
 - **`OnCalendar=`-style wall-clock timer scheduling** (`src/timers.rs`)
   - only relative `OnBootSec=`/`OnUnitActiveSec=` intervals so far.
+- **Socket activation** - a `ListenStream=`-style key that hands a
+  service an already-bound, already-listening socket and only starts it
+  on first connection, the way systemd's `.socket` units do. Genuinely
+  more involved than it looks (handing a specific fd across `fork()`/
+  `exec()` at a stable number, matching the `LISTEN_FDS`/`LISTEN_PID`
+  convention enough other software already speaks) - next up, not
+  attempted alongside everything else in this round.
+- **Any automatic action on memory pressure** (`src/oom.rs`) -
+  `OOMScoreAdjust=` and PSI monitoring/logging are here; deciding which
+  services to proactively stop or throttle under sustained pressure,
+  and in what order, is a policy call deliberately left for later
+  rather than guessed at - see that module's doc comment.
 
 Already built, despite being listed as future work in an earlier version
 of this file: dependency ordering beyond simple `After=` (`Before=`,
 `Requires=`, `Wants=` - see `INTEGRATION.md` for the intentionally
 narrower semantics vs real systemd), watchdog pings (`WatchdogSec=`,
 `WATCHDOG=1` over the same notify socket `READY=1` uses), targets
-(`src/targets.rs`), timers (`src/timers.rs`), and on-demand sandboxed
-app launching (`src/apps.rs`, `APPS.md`).
+(`src/targets.rs`), timers (`src/timers.rs`), on-demand sandboxed app
+launching (`src/apps.rs`, `APPS.md`), opt-in service sandboxing
+(`PrivateTmp=`/`ProtectSystem=`/`NoNewPrivileges=`), OOM-score tuning
+and pressure visibility (`src/oom.rs`), and a queryable recent-log
+buffer (`src/journal.rs`, `mitosctl logs`).
 
 ## License
 
