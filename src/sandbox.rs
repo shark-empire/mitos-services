@@ -185,11 +185,7 @@ unsafe fn private_tmp() -> std::io::Result<()> {
 /// aborting the service launch.
 unsafe fn protect_system() -> std::io::Result<()> {
     // Cast to `&[u8]` so the array elements share the same type
-    for path in [
-        b"/usr\0" as &[u8],
-        b"/boot\0" as &[u8],
-        b"/etc\0" as &[u8],
-    ] {
+    for path in [b"/usr\0" as &[u8], b"/boot\0" as &[u8], b"/etc\0" as &[u8]] {
         let path_ptr = path.as_ptr() as *const c_char;
 
         // First bind-mount the path onto itself.
@@ -216,7 +212,6 @@ unsafe fn protect_system() -> std::io::Result<()> {
     }
     Ok(())
 }
-
 
 unsafe fn drop_privileges(cap_last_cap: u32) -> std::io::Result<()> {
     if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
