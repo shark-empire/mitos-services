@@ -19,6 +19,18 @@ it has been.
 ## [0.3.0] - Unreleased
 
 ### Added
+- `apps.rs::authorize()` now actually calls the `mitos-service` policy
+  daemon (a separate repository) instead of always allowing: `CHECK
+  <sha256> app_launch` against its control socket, with a short (500ms)
+  bounded timeout since `ipc.rs`'s listener handles one connection at a
+  time (see that module's doc for why a slow `authorize()` call matters
+  beyond just the one `LAUNCH` making it). mitos-service unreachable
+  (not deployed on this system yet) still allows the launch - a
+  deliberate, documented bootstrapping exception to "fail closed" for a
+  policy daemon that isn't a standard part of every MITOS install yet;
+  an explicit `DENY`/`ASK` from a *reachable* mitos-service fails the
+  launch. See `apps.rs::authorize`'s doc comment and the updated
+  `APPS.md`.
 - Targets (`src/targets.rs`): named service groups (`target=`/
   `X-Target=`, default `multi-user`) you can switch between at runtime
   with `mitosctl isolate <name>` / the `ISOLATE` control-socket command.
@@ -75,6 +87,18 @@ it has been.
   (`src/journal.rs`): a small, in-memory, 2000-line-capped buffer of
   recent log output, independent of wherever `logging.rs`'s primary
   output (`/dev/kmsg` or stdout/stderr) ends up being collected.
+- Socket activation (`ListenStream=`/`listen_stream=`, `src/sockets.rs`):
+  a service with this key isn't started at boot - a pre-bound, already-
+  listening socket is created on its behalf instead, and the service
+  only starts on the first connection to it, receiving that socket via
+  the same `LISTEN_FDS`/`LISTEN_PID` environment-variable convention
+  real systemd's own socket activation uses, so anything already
+  speaking that protocol works with no MITOS-specific change. The
+  listener is kept open for mitos-services' entire lifetime and handed
+  to every later restart too, not just the triggering activation - see
+  that module's doc comment for exactly what's simplified vs real
+  systemd `.socket` units (one address per service; no re-arming once a
+  service has stopped for good).
 
 ### Fixed
 - `logging.rs` always tagged every line `mitos-init [...]`, copied

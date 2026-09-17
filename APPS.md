@@ -96,18 +96,33 @@ exit - there's no history kept of apps that already finished.
   its children in any way that matters for that), but the `APPS`
   registry is in-memory only and starts empty again.
 - **Don't** launch something you haven't already decided is safe to
-  run. Restating the point above: this socket does not ask "should
-  this be allowed" on your behalf.
+  run. `LAUNCH` does consult mitos-service now (see below), but only for
+  a single, coarse `app_launch` capability check - it's not a
+  substitute for deciding a launch request itself is legitimate.
 
-## Future integration seam
+## Integration with mitos-service
 
-`apps.rs::authorize()` is where a future `mitos-service` policy daemon
-plugs in - today it's a no-op that always allows. When that daemon
-exists, expect `LAUNCH` to start returning `launch failed: permission
-denied` (or similar) for requests it declines, and expect that decision
-to potentially involve a password prompt on a *different* channel
-(the compositor-drawn prompt the permissions design describes) before
-this socket's response comes back - i.e., `LAUNCH` may become slower and
-occasionally interactive-on-someone-else's-screen once that exists. Not
-a concern for any caller today; worth designing your own caller's
-timeout expectations around if you're implementing one now anyway.
+`apps.rs::authorize()` calls out to `mitos-service` (a separate
+repository - the policy daemon the MITOS permissions design calls "the
+brain of the permission system"), checking a fixed capability name,
+`app_launch`, against the launched binary's SHA-256. See that
+function's doc comment for the exact rules, but the short version:
+
+- mitos-service unreachable at all (not deployed on this system yet) -
+  the launch proceeds. A deliberate, temporary bootstrapping exception
+  to "fail closed" - see the doc comment for why.
+- mitos-service reachable and says `DENY` or `ASK` (nothing decided
+  yet) - `LAUNCH` fails with `launch failed: not permitted by
+  mitos-service (...)`. mitos-service has no interactive prompt flow of
+  its own yet either (see its own `README.md`), so today an `ASK`
+  response can only become an `ALLOW` via an administrator running
+  `mitosvc-ctl grant` directly against mitos-service - not something
+  this socket, or `apps.rs`, can trigger on a caller's behalf.
+- mitos-service says `ALLOW` - the launch proceeds.
+
+This call is synchronous and has a short (500ms) timeout - see
+`ipc.rs`'s module doc for why that matters beyond just this one
+command: mitos-services' control socket handles one connection at a
+time, so a slow or stuck mitos-service delays every other `mitosctl`
+command too while a `LAUNCH` is in flight, not just that launch.
+
