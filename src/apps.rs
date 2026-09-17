@@ -96,8 +96,77 @@ fn registry() -> &'static Mutex<Registry> {
 /// The seam for MITOS's future policy daemon - see the module doc's
 /// "What this doesn't do". Always allows; nothing in this repo overrides
 /// it.
-fn authorize(_path: &str, _sha256: &str) -> Result<(), String> {
-    Ok(())
+/// The seam for MITOS's policy daemon, `mitos-service` (see its own
+/// repository) - asks it whether this app is allowed to launch at all,
+/// under the fixed capability name `app_launch`.
+///
+/// Two different kinds of "no" here, treated differently on purpose:
+/// - **mitos-service isn't reachable at all** (connection refused, no
+///   such socket) - treated as `Ok`, allowing the launch. This is a
+///   deliberate, temporary bootstrapping exception to the MITOS
+///   permissions design's own "fail closed" rule: mitos-service is a
+///   separate, independently-deployed component that doesn't exist on
+///   every system yet, and failing every app launch closed by default
+///   before it's even a normal part of a MITOS install would make this
+///   whole feature non-functional out of the box. Revisit this once
+///   mitos-service is a standard part of every deployment.
+/// - **mitos-service responds with `DENY` or `ASK`** (i.e. it's running
+///   and has an opinion, even an unresolved one) - treated as `Err`,
+///   failing closed. The daemon being present and undecided is a real
+///   policy signal, not an infrastructure gap, so the golden rule
+///   applies here without exception.
+fn authorize(path: &str, sha256: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    const SOCKET_PATH: &str = "/run/mitos-service/control.sock";
+    // Short on purpose: ipc.rs's own listener handles one connection at
+    // a time on a single thread (see its module doc), so this call
+    // blocking is this crate's *entire* control socket blocking, not
+    // just this one LAUNCH - a local Unix socket round trip to a
+    // running daemon should be low milliseconds, so this is generous
+    // for the happy path and still bounds the worst case (mitos-service
+    // running but stuck) to something short.
+    const TIMEOUT: Duration = Duration::from_millis(500);
+
+    let mut stream = match UnixStream::connect(SOCKET_PATH) {
+        Ok(s) => s,
+        Err(_) => return Ok(()), // not deployed on this system yet - see above
+    };
+    let _ = stream.set_read_timeout(Some(TIMEOUT));
+    let _ = stream.set_write_timeout(Some(TIMEOUT));
+
+    if stream
+        .write_all(format!("CHECK {sha256} app_launch\n").as_bytes())
+        .is_err()
+    {
+        // Reachable a moment ago but broke mid-request - same
+        // reasoning as an outright connection failure: don't block a
+        // launch on this daemon's own hiccup.
+        return Ok(());
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return Ok(());
+    }
+
+    let response = response.trim();
+    if response == "ALLOW" {
+        Ok(())
+    } else if response == "DENY" || response.starts_with("ASK") {
+        logging::info(&format!(
+            "app launch for '{path}' blocked by mitos-service: {response}"
+        ));
+        Err(format!("not permitted by mitos-service ({response})"))
+    } else {
+        // An unrecognized response shouldn't be trusted either way -
+        // treat it the same as DENY/ASK (fail closed), not as ALLOW.
+        logging::warn(&format!(
+            "mitos-service gave an unrecognized CHECK response '{response}', denying"
+        ));
+        Err(format!("unrecognized response from mitos-service: {response}"))
+    }
 }
 
 /// SHA-256 of the file at `path`, hex-encoded. Hashing the exact bytes

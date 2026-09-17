@@ -22,10 +22,18 @@
 //! `apps.rs` on this thread.
 //!
 //! Connections are handled one at a time, sequentially, on this
-//! listener's own thread - not thread-per-connection. `mitosctl` usage
-//! (connect, send one line, read one response, disconnect) is quick
+//! listener's own thread - not thread-per-connection. Most commands
+//! (connect, send one line, read one response, disconnect) are quick
 //! enough that this is a reasonable simplification for a first version,
-//! not a bottleneck worth the added complexity of a thread pool yet.
+//! not a bottleneck worth the added complexity of a thread pool yet -
+//! the one exception is `LAUNCH`, whose `apps.rs::authorize` call now
+//! reaches out to mitos-service (a bounded, short timeout - see that
+//! function's doc comment - but not instant the way every other command
+//! here is), so a slow or stuck mitos-service delays every *other*
+//! command too, not just that one `LAUNCH`. Worth revisiting (a thread
+//! pool, or moving just `LAUNCH` off this listener's thread) if that
+//! turns out to matter in practice; not changed here alongside
+//! everything else this round.
 
 use crate::logging;
 use crate::signals;
