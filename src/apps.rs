@@ -165,7 +165,9 @@ fn authorize(path: &str, sha256: &str) -> Result<(), String> {
         logging::warn(&format!(
             "mitos-service gave an unrecognized CHECK response '{response}', denying"
         ));
-        Err(format!("unrecognized response from mitos-service: {response}"))
+        Err(format!(
+            "unrecognized response from mitos-service: {response}"
+        ))
     }
 }
 
