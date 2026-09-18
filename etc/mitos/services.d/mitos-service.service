@@ -1,0 +1,39 @@
+# Example unit file for starting mitos-service (the permission policy
+# daemon - see its own repository) as an ordinary mitos-services-
+# supervised service. Nothing about mitos-service needs it to be PID 1
+# or special in any way - it just needs to be up before anything tries
+# to CHECK against it, which in practice means "started at boot, in the
+# default target" rather than deferred behind a target switch or socket
+# activation.
+#
+# Not critical=true: apps.rs::authorize() fails *open* (allows the
+# launch) if mitos-service isn't reachable at all - see that function's
+# doc comment - specifically so this daemon being down doesn't take the
+# rest of the system with it. Losing policy enforcement is a real
+# degradation, worth alerting on, but not one this project's "critical
+# service died -> shut everything down" mechanism is the right response
+# to.
+#
+# Before using the User=/Group= lines below: mitos-service doesn't
+# create its own state/runtime directories with any particular
+# ownership (no StateDirectory=/RuntimeDirectory=-equivalent exists in
+# this project yet - see mitos-services' own README for that gap). If
+# you drop privileges here, you must first:
+#   useradd --system --no-create-home mitos-service
+#   install -d -o mitos-service -g mitos-service /var/lib/mitos-service
+#   install -d -o mitos-service -g mitos-service /run/mitos-service
+# Skip User=/Group= (leave mitos-service running as root, same as every
+# other service here defaults to) if you'd rather not do that yet -
+# nothing else about this file changes.
+#
+# Copy to /etc/mitos/services.d/mitos-service.service.
+
+[Unit]
+Description=MITOS permission policy daemon
+
+[Service]
+ExecStart=/usr/bin/mitos-service
+Restart=always
+NoNewPrivileges=true
+# User=mitos-service
+# Group=mitos-service
