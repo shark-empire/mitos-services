@@ -1,0 +1,25 @@
+# Example unit file for mitos-pkgd, mitos-pkg's daemon half (the
+# Unix-socket IPC service - see mitos-pkg's own daemon/ module). The
+# mitos-pkg CLI itself isn't a service; this is specifically for the
+# background daemon it talks to.
+#
+# Root, not sandboxed: installing/removing packages means writing
+# across much of the filesystem by design - ProtectSystem= here would
+# defeat the daemon's entire purpose (it works specifically by writing
+# to the /usr, /etc, etc. that ProtectSystem= would make read-only).
+#
+# Copy to /etc/mitos/services.d/mitos-pkg.service.
+
+[Unit]
+Description=MITOS package manager daemon
+
+[Service]
+ExecStart=/usr/bin/mitos-pkgd
+Restart=always
+# Soft-ordered after networking (package installs typically need it to
+# fetch anything), but not required - mitos-pkgd should still come up
+# and serve requests against the local package database even if
+# mitos-network is missing or slow; only specific fetch operations need
+# connectivity, not the daemon's own startup.
+After=mitos-network
+Wants=mitos-network

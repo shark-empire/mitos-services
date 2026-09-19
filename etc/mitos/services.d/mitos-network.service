@@ -1,0 +1,28 @@
+# Example unit file for mitos-network (the connectivity daemon -
+# interface config, DHCP, wifi association, etc.).
+#
+# Left running as root deliberately, unlike the more hardened examples
+# elsewhere in this directory: configuring network interfaces needs
+# privileges (raw sockets, NET_ADMIN-equivalent operations) this
+# project has no way to grant selectively - it can only drop privileges
+# entirely (User=/Group=) or leave them all in place (root). A future
+# CapabilityBoundingSet=-style directive (see mitos-services' own
+# sandbox.rs module doc for why that's not implemented yet) would be
+# the real fix, letting this run unprivileged with just the specific
+# capabilities it needs.
+#
+# Copy to /etc/mitos/services.d/mitos-network.service.
+
+[Unit]
+Description=MITOS network connectivity daemon
+
+[Service]
+ExecStart=/usr/bin/mitos-network
+Restart=always
+NoNewPrivileges=true
+# WatchdogSec=30
+# ^ Only uncomment once mitos-network actually sends "WATCHDOG=1\n" to
+# $NOTIFY_SOCKET at least this often (see src/notify.rs in
+# mitos-services). Enabling this before that's implemented doesn't fail
+# safe - it puts a perfectly healthy daemon into a 30-second kill-and-
+# restart loop, since it would never send the ping this expects.
